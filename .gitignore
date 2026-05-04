@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+htmlcov/
+.coverage
+coverage.xml
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
+# Never commit generated audio, encrypted packages, or benchmark output.
+*.wav
+*.flac
+*.mp3
+*.aiff
+*.securetrack
+*.enc
+
+# Allow .gitkeep files inside results/
+results/*
+!results/.gitkeep
+
+# Notebook outputs / scratch
+*.ipynb_checkpoints/
+scratch/
+tmp/

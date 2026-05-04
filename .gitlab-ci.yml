@@ -1,0 +1,33 @@
+# GitLab CI configuration for the SecureTrack prototype.
+#
+# This pipeline is intentionally simple for the dissertation skeleton.
+# It installs the project in editable mode along with dev extras,
+# runs ruff for static checks and pytest for the unit tests.
+
+stages:
+  - lint
+  - test
+
+default:
+  image: python:3.11-slim
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -e ".[dev]"
+
+lint:
+  stage: lint
+  script:
+    - ruff check src tests examples
+  allow_failure: true
+
+unit-tests:
+  stage: test
+  script:
+    - pytest --cov=securetrack --cov-report=term-missing
+  artifacts:
+    when: always
+    reports:
+      junit: results/junit.xml
+    paths:
+      - results/
+    expire_in: 1 week

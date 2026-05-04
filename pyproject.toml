@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "securetrack"
+version = "0.1.0"
+description = "Secure end-to-end encrypted track sharing prototype for Audacity collaborators."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Shehab El Marabta" },
+]
+keywords = ["audacity", "encryption", "audio", "aes-gcm", "dissertation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Development Status :: 2 - Pre-Alpha",
+]
+
+dependencies = [
+    # AESGCM and Scrypt have been stable in cryptography since 2.x; we
+    # require 41.0 to align with what most current Linux distros ship.
+    "cryptography>=41.0.0",
+]
+
+[project.optional-dependencies]
+analysis = [
+    "pandas>=2.1.0",
+    "matplotlib>=3.8.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+securetrack = "securetrack.cli:main"
+
+[project.urls]
+Repository = "https://github.com/shehabelmarabta-coder/disso"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+addopts = "-ra -q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
