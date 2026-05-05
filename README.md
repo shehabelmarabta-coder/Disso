@@ -8,15 +8,17 @@
 Music collaborators routinely exchange unreleased WAV stems through
 Dropbox, Google Drive, email and messaging apps. These channels were
 never designed for managing creative material, which leads to
-fragmented access control and a tangible risk of leaks. SecureTrack is
-a Python prototype that takes a WAV file exported from Audacity,
-encrypts it locally with a passphrase, and produces a portable
-``.securetrack`` package that only the intended collaborator can open.
+fragmented access control and a tangible risk of leaks. SecureTrack
+is a Python prototype that takes a WAV file exported from Audacity,
+encrypts it locally and produces a portable ``.securetrack`` package
+that only the intended collaborator(s) can open.
 
-This repository contains the **first rough skeleton** described in the
-dissertation implementation chapter. It is deliberately small and
-honest: there is no cloud upload, no production-grade key management,
-and no native Audacity plugin yet.
+This repository contains the dissertation implementation artefact.
+The current release is **format v2**: the package is bound to one or
+more recipients (passphrase or X25519 public key), is optionally
+signed by the sender with an Ed25519 key, and is encrypted in
+fixed-size AEAD chunks so very large WAVs do not have to fit in
+memory.
 
 ## Why the prototype exists
 
@@ -26,8 +28,28 @@ and no native Audacity plugin yet.
 * To produce reproducible measurements (size overhead, throughput,
   tamper detection) for the dissertation evaluation chapter.
 * To provide a clean foundation that later versions can build on
-  (per-recipient public-key access, native Audacity integration,
-  cloud relay, revocation and audit logging).
+  (cloud relay, project-level key management, native Audacity plugin
+  GUI, revocation and audit logging).
+
+## What's new in v2
+
+* **Per-recipient public-key encryption.** A package can be addressed
+  to one or more X25519 public keys; the recipient unwraps with
+  their private key, no shared secret needed.
+* **Mixed recipients.** A single package can target several pubkey
+  recipients *and* a passphrase fallback at the same time.
+* **Optional Ed25519 signature.** The sender can sign metadata,
+  recipient list and ciphertext digest. Recipients verify with the
+  embedded public key, or with a public key supplied out of band.
+* **Chunked AEAD streaming.** The audio is encrypted in 1 MiB chunks
+  by default; each chunk authenticates ``metadata || chunk_index ||
+  num_chunks`` so chunks cannot be reordered, dropped or replayed.
+* **Real Audacity bridge.** ``audacity_bridge.py`` now drives
+  ``mod-script-pipe`` for ``Export2`` and ``Help`` commands, with a
+  high-level ``secure_export_from_audacity`` helper that exports,
+  encrypts and securely deletes the temporary WAV.
+* **Hardened GUI.** Two-tab Tkinter window with a recipient list
+  picker, signing-key fields and a background progress bar.
 
 ## Repository layout
 
@@ -39,17 +61,16 @@ secure-audacity-track-sharing/
 ├── .gitlab-ci.yml
 ├── src/securetrack/
 │   ├── __init__.py
-│   ├── crypto.py            # AES-256-GCM + Scrypt key derivation
-│   ├── package.py           # .securetrack package format (zip + metadata)
-│   ├── metrics.py           # Pure metric helpers
-│   ├── benchmark.py         # End-to-end timing + tamper test
-│   ├── cli.py               # `python -m securetrack.cli ...`
-│   ├── gui.py               # Minimal Tkinter GUI skeleton
-│   └── audacity_bridge.py   # Placeholder for future Audacity integration
-├── tests/
-│   ├── test_crypto_roundtrip.py
-│   ├── test_tamper_detection.py
-│   └── test_metrics.py
+│   ├── crypto.py            # AEAD + Scrypt + chunked streaming + Ed25519
+│   ├── keys.py              # X25519 / Ed25519 keypair gen + PEM I/O
+│   ├── recipients.py        # per-recipient content-key wrapping
+│   ├── package.py           # .securetrack v2 package format
+│   ├── metrics.py           # pure metric helpers
+│   ├── benchmark.py         # encrypt+decrypt timing + tamper test
+│   ├── cli.py               # argparse subcommands
+│   ├── gui.py               # Tkinter GUI (progress bar, recipient list)
+│   └── audacity_bridge.py   # mod-script-pipe driver + secure_export
+├── tests/                   # 60+ pytest tests
 ├── examples/
 │   └── generate_sample_wavs.py
 ├── docs/
@@ -57,128 +78,159 @@ secure-audacity-track-sharing/
 │   ├── user_manual.md
 │   ├── technical_design.md
 │   └── audacity_integration_notes.md
-└── results/                 # Benchmark CSVs land here (gitignored)
+└── results/                 # benchmark CSVs (gitignored)
 ```
 
 ## Install
 
 The prototype targets **Python 3.11+** and depends only on the
-[`cryptography`](https://cryptography.io) library. Optional extras add
-`pandas` and `matplotlib` for offline analysis of the benchmark CSV.
+[`cryptography`](https://cryptography.io) library.
 
 ```bash
 git clone <this repository>
 cd secure-audacity-track-sharing
-
-# Recommended: a fresh virtual environment
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-
-# Editable install with development extras (pytest, ruff)
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-## Generating example WAVs
-
-The repository deliberately does **not** ship any real audio. Generate
-a few small synthetic WAVs first:
+## Quick demo (passphrase only)
 
 ```bash
 python examples/generate_sample_wavs.py
+
+python -m securetrack.cli encrypt \
+    -i examples/sample.wav -o results/sample.securetrack -p "test password"
+
+python -m securetrack.cli decrypt \
+    -i results/sample.securetrack -o results/recovered.wav -p "test password"
+
+sha256sum examples/sample.wav results/recovered.wav     # hashes match
 ```
 
-This writes ``examples/sample.wav`` (mono 440 Hz),
-``examples/sample_stereo.wav`` (stereo 440 Hz / 660 Hz) and
-``examples/sample_silence.wav``. They are excluded from git.
+## Per-recipient public-key sharing
 
-## Running encryption
+Generate a long-term X25519 keypair for the recipient (Bob):
+
+```bash
+python -m securetrack.cli keygen --kind x25519 \
+    --private-out keys/bob.priv.pem --public-out keys/bob.pub.pem
+```
+
+Alice (the sender) encrypts to Bob's public key, with no shared
+passphrase:
 
 ```bash
 python -m securetrack.cli encrypt \
-    --input  examples/sample.wav \
-    --output results/sample.securetrack \
-    --passphrase "test password"
+    -i examples/sample.wav -o results/for-bob.securetrack \
+    --recipient keys/bob.pub.pem
 ```
 
-If you omit ``--passphrase`` the CLI prompts for it without echoing.
-
-## Running decryption
+Bob decrypts with his private key:
 
 ```bash
 python -m securetrack.cli decrypt \
-    --input  results/sample.securetrack \
-    --output results/recovered.wav \
-    --passphrase "test password"
+    -i results/for-bob.securetrack -o results/recovered.wav \
+    --key keys/bob.priv.pem
 ```
 
-A wrong passphrase or any modification to the package causes
-decryption to fail with a clear error and a non-zero exit code.
+Multiple recipients are supported by repeating ``--recipient``, and a
+passphrase fallback can be added with ``-p``.
 
-## Running benchmarks
+## Signing a package (Ed25519)
+
+```bash
+python -m securetrack.cli keygen --kind ed25519 \
+    --private-out keys/alice.sign.pem --public-out keys/alice.verify.pem
+
+python -m securetrack.cli encrypt \
+    -i examples/sample.wav -o results/signed.securetrack \
+    --recipient keys/bob.pub.pem \
+    --signing-key keys/alice.sign.pem \
+    --label project=demo --creator-name alice
+
+python -m securetrack.cli decrypt \
+    -i results/signed.securetrack -o results/recovered.wav \
+    --key keys/bob.priv.pem \
+    --expect-signed-by keys/alice.verify.pem
+```
+
+If the signature does not verify under ``keys/alice.verify.pem``, the
+decrypt subcommand exits with status 5 and writes no plaintext.
+
+## Inspecting a package without decrypting
+
+```bash
+python -m securetrack.cli inspect -i results/signed.securetrack --json
+```
+
+Prints the canonical metadata JSON. The recipient list and ciphertext
+remain encrypted; only the metadata header is human-readable.
+
+## Benchmarks
 
 ```bash
 python -m securetrack.cli benchmark \
-    --input  examples/sample.wav \
-    --output results/benchmark_results.csv \
-    --passphrase "test password"
+    -i examples/sample.wav -o results/benchmark_results.csv -p "test password"
 ```
 
-The benchmark performs one encrypt and one decrypt round-trip,
-verifies SHA-256 equality, runs a one-byte tamper test, and appends a
-single row to the CSV. The header is written automatically the first
-time the file is created.
+Appends one row to the CSV with timing, throughput, size overhead and
+tamper-detection columns. See ``docs/evaluation_plan.md``.
 
-## Running the GUI skeleton
+## GUI
 
 ```bash
 python -m securetrack.gui
 ```
 
-This is a minimal Tk window with **Encrypt WAV…** and **Decrypt
-package…** buttons. It reuses the same library code as the CLI.
+Two tabs (Encrypt / Decrypt), recipient list with Add/Remove, signing
+key fields, a background progress bar and a status line. The GUI uses
+threads so the main loop stays responsive while Scrypt runs.
+
+## Audacity integration
+
+* **Manual workflow (works today):** export a WAV from Audacity
+  (*File ▸ Export ▸ Export as WAV*) and run SecureTrack on the file.
+* **Native bridge (works today, requires Audacity with mod-script-pipe
+  enabled):** call
+  ``securetrack.audacity_bridge.secure_export_from_audacity``. It
+  drives ``Export2`` over the script pipe, encrypts the resulting WAV,
+  then securely deletes the temporary plaintext.
+
+See ``docs/audacity_integration_notes.md`` for the protocol details
+and known caveats (temporary plaintext on disk, pipe authentication
+on shared machines).
 
 ## Running the tests
 
 ```bash
-pytest -v
+python -m pytest -v
 ```
 
-The test suite covers correctness of the round-trip, rejection of
-wrong passphrases, tamper detection across the ciphertext / metadata /
-ZIP container, and the pure-Python metric helpers.
-
-## How this links to Audacity
-
-The prototype works on **files exported from Audacity**: the user
-exports a project to WAV via ``File → Export → Export as WAV`` and
-then runs SecureTrack on that file. ``src/securetrack/audacity_bridge.py``
-documents the planned native integration via Audacity's
-``mod-script-pipe`` interface but does not pretend to implement it
-yet. See ``docs/audacity_integration_notes.md`` for the full plan.
+Covers crypto round-trip, X25519 / Ed25519 PEM I/O, multi-recipient
+unwrap, chunked streaming, signature verification, tamper detection,
+the CLI subcommands and the Audacity pipe driver against a fake FIFO
+server.
 
 ## Current limitations (honest list)
 
-* This first version is a **prototype**, not a production-ready
-  security product.
-* It does **not** provide cloud sharing — packages are produced
-  locally and the user transports them by their preferred channel.
-* It does **not** provide native Audacity plug-in integration yet.
-* Passphrase exchange must be handled out of band by the users.
+* This is still a **prototype**. It has not been independently audited.
+* No cloud relay — packages are produced locally; the user transports
+  them via their preferred channel.
 * Once a recipient has decrypted a package, **access cannot be
-  revoked** — the same limitation as any plain file share.
-* A future version should adopt **public-key cryptography per
-  recipient** (e.g. age, NaCl box) so that no shared secret has to be
-  exchanged ahead of time.
+  revoked** (same as any plain file share).
+* The Audacity bridge writes a temporary plaintext WAV to disk.
+  ``_secure_delete`` is best-effort on journalled / SSD filesystems.
+* The Tkinter GUI is functional but minimal; drag-and-drop and per-
+  project key management remain on the backlog.
 
 ## Next development steps
 
-See ``docs/technical_design.md`` for the prioritised backlog. The
-first five items are roughly:
-
-1. Per-recipient public-key encryption (X25519 + AES-GCM).
-2. Native Audacity bridge via ``mod-script-pipe``.
-3. Streaming I/O so very large WAV files do not have to fit in
-   memory.
-4. Audit log inside the package describing who created it and when.
-5. Hardened GUI with progress bar, drag-and-drop and project-level
-   key management.
+1. Cloud relay with at-rest re-encryption and revocable links.
+2. Project-level key management (one X25519 keypair per project,
+   per-collaborator membership).
+3. Header-only download + streaming decrypt, so a recipient can begin
+   playback before the whole package has been fetched.
+4. Native Audacity menu item via Nyquist that calls the Python bridge
+   in a daemon process, removing the manual Export step entirely.
+5. Independent security review of the v2 format (third-party
+   cryptographer or `cryptography.io` mailing list feedback).

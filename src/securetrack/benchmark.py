@@ -28,7 +28,7 @@ import hashlib
 import time
 from pathlib import Path
 
-from . import crypto, package
+from . import crypto, package, recipients
 from .metrics import (
     CSV_FIELDNAMES,
     BenchmarkMetrics,
@@ -69,25 +69,27 @@ def run_benchmark(input_path: Path, passphrase: str) -> BenchmarkMetrics:
     plaintext = input_path.read_bytes()
     sha_original = hashlib.sha256(plaintext).hexdigest()
 
+    specs = [recipients.PassphraseRecipient(passphrase=passphrase)]
+
     # --- encryption ------------------------------------------------------
     t0 = time.perf_counter()
     package_bytes = package.pack(
         plaintext,
-        passphrase,
+        recipient_specs=specs,
         original_filename=input_path.name,
     )
     enc_seconds = time.perf_counter() - t0
 
     # --- decryption ------------------------------------------------------
     t0 = time.perf_counter()
-    _, decrypted = package.unpack(package_bytes, passphrase)
+    _, decrypted = package.unpack(package_bytes, passphrase=passphrase)
     dec_seconds = time.perf_counter() - t0
     sha_decrypted = hashlib.sha256(decrypted).hexdigest()
 
     # --- tamper detection -----------------------------------------------
     tampered = _flip_one_byte(package_bytes)
     try:
-        package.unpack(tampered, passphrase)
+        package.unpack(tampered, passphrase=passphrase)
         tamper_detected = False  # Should have raised - this is a failure.
     except (crypto.InvalidPassphraseError, ValueError):
         tamper_detected = True

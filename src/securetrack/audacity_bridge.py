@@ -1,104 +1,316 @@
-"""Placeholder bridge between SecureTrack and Audacity.
+"""Bridge between SecureTrack and Audacity's ``mod-script-pipe`` interface.
 
-This module is **not** a working Audacity plugin. It is a documented
-placeholder that captures the intended integration path so that a later
-iteration of the project can fill in the implementation.
+Audacity exposes a scripting interface that lets external programs
+drive the running application. On POSIX this is a pair of named FIFOs
+under ``$TMPDIR``; on Windows it is a pair of named pipes under
+``\\\\.\\pipe\\``. The protocol is simple: each command is a UTF-8
+string terminated by a newline, and Audacity replies with one or more
+lines followed by either ``BatchCommand finished: OK`` or
+``BatchCommand finished: Failed!`` and a trailing blank line.
 
-Two integration paths are anticipated:
+Only a small subset of Audacity's commands is needed by the
+prototype:
 
-1. **External export workflow (current prototype).**
-   The user exports their audio from Audacity manually
-   (``File → Export → Export as WAV``) and then runs SecureTrack via
-   the CLI or GUI. This is what the dissertation skeleton implements.
+* ``Help: Command=Help`` — used as a no-op to confirm the pipe is
+  connected to a real Audacity instance.
+* ``Export2: Filename="<path>" NumChannels=2`` — exports the active
+  project to a WAV at ``<path>``.
 
-2. **Native Audacity scripting via ``mod-script-pipe``.**
-   Audacity ships with a scripting interface called
-   `mod-script-pipe <https://manual.audacityteam.org/man/scripting.html>`_
-   that exposes commands such as ``Export2`` over a named pipe / FIFO.
-   A future version of SecureTrack can drive this pipe to ask Audacity
-   to render the current project to a temporary WAV, then pass that
-   file straight into :func:`securetrack.package.encrypt_file`. The
-   stubs below show the intended public surface.
+Two surfaces are exposed:
 
-3. **Nyquist plug-in (longer term).**
-   Audacity also supports Nyquist plug-ins for in-app menu items.
-   A thin Nyquist front-end could call out to a Python helper via
-   ``system`` once the pipe-based path is proven.
+* :class:`AudacityScriptPipe` — a thin RAII wrapper around the pipe
+  that can be unit-tested against fake FIFOs (see the corresponding
+  test module).
+* :func:`secure_export_from_audacity` — high-level helper that:
+  drives Audacity to export a temporary WAV, encrypts that WAV into
+  a ``.securetrack`` package, and securely deletes the temporary
+  file before returning.
 
-The functions in this module raise :class:`NotImplementedError` and
-exist only so that callers (and the dissertation reader) can see the
-intended API shape.
+The bridge is **opt-in**: importing this module never tries to talk
+to Audacity. A user must call :func:`detect_pipe_paths` /
+:func:`AudacityScriptPipe.connect` explicitly.
 """
 
 from __future__ import annotations
 
+import os
+import sys
+import tempfile
+import time
+from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
-# The default name of the script pipe under POSIX systems. On Windows it
-# is exposed as ``\\.\pipe\ToSrvPipe`` and ``\\.\pipe\FromSrvPipe``.
-_POSIX_TO_PIPE = Path("/tmp/audacity_script_pipe.to.<uid>")  # noqa: ERA001 - documentation
-_POSIX_FROM_PIPE = Path("/tmp/audacity_script_pipe.from.<uid>")  # noqa: ERA001
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from . import package, recipients
+
+# --- pipe path resolution --------------------------------------------------
+
+_POSIX_TO_NAME = "audacity_script_pipe.to.{uid}"
+_POSIX_FROM_NAME = "audacity_script_pipe.from.{uid}"
+_WIN_TO_NAME = r"\\.\pipe\ToSrvPipe"
+_WIN_FROM_NAME = r"\\.\pipe\FromSrvPipe"
+
+_DEFAULT_RESPONSE_TERMINATOR: str = "BatchCommand finished:"
+_DEFAULT_TIMEOUT_SECONDS: float = 5.0
 
 
-def is_audacity_pipe_available() -> bool:
-    """Return ``True`` if Audacity's scripting pipe appears to be running.
+@dataclass(frozen=True)
+class PipePaths:
+    """Resolved Audacity pipe endpoints."""
 
-    .. note::
-       Not yet implemented. A real implementation must:
+    to_audacity: Path
+    from_audacity: Path
 
-       * Resolve the per-user pipe paths (``$TMPDIR/audacity_script_pipe.*``
-         on POSIX, ``\\\\.\\pipe\\ToSrvPipe`` on Windows).
-       * Check that both endpoints exist and can be opened non-blockingly.
-       * Optionally send a no-op ``Help: Command=Help`` and read the
-         response to confirm Audacity is actually listening.
+
+def detect_pipe_paths(*, uid: int | None = None, tmpdir: Path | None = None) -> PipePaths:
+    """Return the conventional pipe paths for the current user.
+
+    On POSIX the default base directory is ``/tmp`` and the file names
+    are ``audacity_script_pipe.{to,from}.<uid>``. On Windows the names
+    are fixed and ``tmpdir`` / ``uid`` are ignored.
+
+    The function does not check whether the paths exist; use
+    :func:`is_audacity_pipe_available` for that.
     """
-    raise NotImplementedError("Audacity pipe detection is not yet implemented.")
+    if sys.platform.startswith("win"):
+        return PipePaths(to_audacity=Path(_WIN_TO_NAME), from_audacity=Path(_WIN_FROM_NAME))
+    base = Path(tmpdir) if tmpdir is not None else Path(tempfile.gettempdir())
+    real_uid = uid if uid is not None else os.getuid()
+    return PipePaths(
+        to_audacity=base / _POSIX_TO_NAME.format(uid=real_uid),
+        from_audacity=base / _POSIX_FROM_NAME.format(uid=real_uid),
+    )
 
 
-def export_current_project_audio(target_path: Path) -> Path:
-    """Ask Audacity to export the active project to ``target_path`` as WAV.
+def is_audacity_pipe_available(paths: PipePaths | None = None) -> bool:
+    """Return ``True`` if both pipe endpoints exist on disk.
 
-    .. note::
-       Not yet implemented. Intended sequence::
-
-           1. Open the script pipe.
-           2. Send: ``Export2: Filename="<target>" NumChannels=2``
-           3. Wait for the ``BatchCommand finished: OK`` response.
-           4. Return ``target_path``.
-
-       The dissertation prototype side-steps this by asking the user
-       to use ``File → Export`` manually.
+    This is a cheap pre-flight check; a returned ``True`` does not
+    guarantee that Audacity is actually listening — only that the
+    files / pipes exist. Use :meth:`AudacityScriptPipe.ping` to
+    confirm liveness.
     """
-    raise NotImplementedError("Audacity export bridge is not yet implemented.")
+    paths = paths or detect_pipe_paths()
+    return paths.to_audacity.exists() and paths.from_audacity.exists()
+
+
+# --- pipe driver -----------------------------------------------------------
+
+
+class AudacityPipeError(RuntimeError):
+    """Raised when the script pipe cannot be reached or returns Failed."""
+
+
+class AudacityScriptPipe:
+    """Open ``mod-script-pipe`` and run commands against it.
+
+    Use as a context manager::
+
+        with AudacityScriptPipe.connect() as pipe:
+            pipe.ping()
+            pipe.export_wav(Path("/tmp/render.wav"))
+    """
+
+    def __init__(self, to_handle: IO[str], from_handle: IO[str]) -> None:
+        self._to = to_handle
+        self._from = from_handle
+
+    # ---- construction ----------------------------------------------------
+
+    @classmethod
+    def connect(
+        cls,
+        paths: PipePaths | None = None,
+        *,
+        timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    ) -> AudacityScriptPipe:
+        paths = paths or detect_pipe_paths()
+        if not paths.to_audacity.exists() or not paths.from_audacity.exists():
+            raise AudacityPipeError(
+                f"Audacity script pipe not found at {paths.to_audacity} / "
+                f"{paths.from_audacity}. Make sure Audacity is running with "
+                "mod-script-pipe enabled (Edit ▸ Preferences ▸ Modules)."
+            )
+        # Open the request side write-only, response side read-only. We
+        # use line-buffered text mode to mirror Audacity's protocol.
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        last_exc: OSError | None = None
+        while time.monotonic() < deadline:
+            try:
+                to_handle = open(paths.to_audacity, mode="w", encoding="utf-8", buffering=1)
+                from_handle = open(paths.from_audacity, mode="r", encoding="utf-8")
+                return cls(to_handle, from_handle)
+            except OSError as exc:  # pragma: no cover - environment dependent
+                last_exc = exc
+                time.sleep(0.1)
+        raise AudacityPipeError(
+            f"Could not open Audacity script pipe within {timeout_seconds:.1f}s: {last_exc}"
+        )
+
+    # ---- context manager -------------------------------------------------
+
+    def __enter__(self) -> AudacityScriptPipe:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        for handle in (self._to, self._from):
+            with suppress(Exception):
+                handle.close()
+
+    # ---- commands --------------------------------------------------------
+
+    def send_command(
+        self,
+        command: str,
+        *,
+        terminator: str = _DEFAULT_RESPONSE_TERMINATOR,
+        timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    ) -> str:
+        """Send a single command and return Audacity's response.
+
+        On POSIX the command must end with a newline; we always append
+        ``\\n`` here so callers can pass plain strings.
+        """
+        if "\n" in command:
+            raise ValueError("commands must not contain embedded newlines")
+        self._to.write(command + "\n")
+        self._to.flush()
+        return self._read_response(terminator=terminator, timeout_seconds=timeout_seconds)
+
+    def _read_response(
+        self,
+        *,
+        terminator: str,
+        timeout_seconds: float,
+    ) -> str:
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        lines: list[str] = []
+        while True:
+            if time.monotonic() > deadline:
+                raise AudacityPipeError(
+                    f"Timed out after {timeout_seconds:.1f}s waiting for response."
+                )
+            line = self._from.readline()
+            if not line:
+                # End of stream while waiting for terminator.
+                if lines:
+                    raise AudacityPipeError(
+                        "Pipe closed before response terminator was seen."
+                    )
+                continue
+            lines.append(line)
+            if line.startswith(terminator):
+                break
+        return "".join(lines)
+
+    def ping(self) -> str:
+        """Send a no-op command to confirm Audacity is listening."""
+        response = self.send_command("Help: Command=Help")
+        if "Failed" in response.splitlines()[-2:][0] if response.splitlines() else False:
+            raise AudacityPipeError("Audacity reported failure for Help command.")
+        return response
+
+    def export_wav(
+        self,
+        target_path: Path,
+        *,
+        num_channels: int = 2,
+        timeout_seconds: float = 60.0,
+    ) -> Path:
+        """Drive Audacity to export the active project to ``target_path`` as WAV."""
+        target_path = Path(target_path).resolve()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        # Audacity expects the path inside double quotes.
+        command = f'Export2: Filename="{target_path}" NumChannels={int(num_channels)}'
+        response = self.send_command(command, timeout_seconds=timeout_seconds)
+        if "Failed" in response:
+            raise AudacityPipeError(
+                f"Audacity Export2 failed:\n{response.strip()}"
+            )
+        if not target_path.is_file():
+            raise AudacityPipeError(
+                f"Audacity claimed success but {target_path} was not created."
+            )
+        return target_path
+
+
+# --- high-level helper -----------------------------------------------------
 
 
 def secure_export_from_audacity(
     target_package: Path,
-    passphrase: str,
     *,
+    recipient_specs: list[recipients.RecipientSpec],
     labels: dict[str, str] | None = None,
+    creator: dict[str, str] | None = None,
+    signing_key: Ed25519PrivateKey | None = None,
+    pipe_paths: PipePaths | None = None,
+    num_channels: int = 2,
 ) -> Path:
-    """End-to-end helper: export from Audacity then encrypt the result.
+    """Export the current Audacity project and seal the WAV in a package.
 
-    .. note::
-       Not yet implemented. The intended flow is:
-
-       1. ``wav_path = export_current_project_audio(temp_wav)``
-       2. ``package.encrypt_file(wav_path, target_package, passphrase, labels=labels)``
-       3. Securely delete the temporary WAV.
-
-       For the first prototype, users should run the export step manually
-       in Audacity and then call :func:`securetrack.package.encrypt_file`
-       (or the ``securetrack encrypt`` CLI command) directly.
+    The temporary WAV is created in a per-call temp directory and is
+    securely deleted (overwritten with zeros, then unlinked) before
+    this function returns, regardless of success or failure.
     """
-    raise NotImplementedError(
-        "Native Audacity integration is not yet implemented; "
-        "export the file from Audacity manually and use the CLI / GUI for now."
-    )
+    target_package = Path(target_package)
+    target_package.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="securetrack-") as tmp_dir:
+        tmp_wav = Path(tmp_dir) / "render.wav"
+        try:
+            with AudacityScriptPipe.connect(pipe_paths) as pipe:
+                pipe.ping()
+                pipe.export_wav(tmp_wav, num_channels=num_channels)
+
+            package.encrypt_file(
+                tmp_wav,
+                target_package,
+                recipient_specs=recipient_specs,
+                labels=labels,
+                creator=creator,
+                signing_key=signing_key,
+            )
+        finally:
+            _secure_delete(tmp_wav)
+
+    return target_package
+
+
+def _secure_delete(path: Path) -> None:
+    """Overwrite a file with zeros and unlink it, ignoring errors.
+
+    This is a *best effort* defence; on many filesystems (journalled,
+    copy-on-write, SSD with wear-levelling) overwriting in place does
+    not reliably erase data. The dissertation discusses this caveat.
+    """
+    if not path.is_file():
+        return
+    with suppress(OSError):
+        size = path.stat().st_size
+        with path.open("r+b") as fh:
+            chunk = b"\x00" * 65536
+            remaining = size
+            while remaining > 0:
+                fh.write(chunk[: min(len(chunk), remaining)])
+                remaining -= min(len(chunk), remaining)
+            fh.flush()
+            os.fsync(fh.fileno())
+    with suppress(OSError):
+        path.unlink()
 
 
 __all__ = [
+    "AudacityPipeError",
+    "AudacityScriptPipe",
+    "PipePaths",
+    "detect_pipe_paths",
     "is_audacity_pipe_available",
-    "export_current_project_audio",
     "secure_export_from_audacity",
 ]
