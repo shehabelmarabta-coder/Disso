@@ -1,267 +1,273 @@
-# Technical Design (v2)
+# Technical Design
 
-This document is an extended companion to Chapter 4 of the
-dissertation. It describes the cryptographic choices, the v2
-``.securetrack`` package format and the module layout of the
-prototype.
+This document supports Chapter 4 of the dissertation. It describes
+SecureTrack's design objectives, architecture, encryption choices and
+limitations.
 
-## 1. Goals and non-goals
+## 1. System overview
 
-**Goals.**
-* End-to-end confidentiality, integrity and origin authentication of
-  an audio file shared between collaborators.
-* No reliance on a shared passphrase: a sender can address a package
-  to one or more X25519 public keys.
-* No upper bound on file size that fits on disk: the audio is
-  encrypted in fixed-size AEAD chunks rather than as a single blob.
-* Reproducible measurements for the dissertation evaluation chapter.
-* A code base small enough for a single student to explain in the
-  viva.
+SecureTrack is a Python desktop application for sharing unreleased
+audio between music collaborators without exposing the audio in
+plaintext on third-party services. It accepts a WAV file (either
+exported manually from Audacity or rendered automatically through
+Audacity's scripting interface), encrypts the audio locally and
+produces a single sealed file with the ``.securetrack`` extension.
+A recipient with the matching passphrase or private key can then
+recover the original WAV.
 
-**Non-goals (this version).**
-* Cloud upload, key servers or directory services.
-* Forward secrecy after long-term private-key compromise.
-* Streaming I/O off disk (chunks are still materialised in memory;
-  the chunk-on-disk variant is on the backlog).
-* Defence against compromise of the sender or recipient endpoint.
+The application has three components:
 
-## 2. Cryptographic design
+* a small cryptographic core (``securetrack.crypto``,
+  ``securetrack.package``, ``securetrack.recipients``,
+  ``securetrack.keys``);
+* a desktop GUI (``securetrack.gui``) and a command-line interface
+  (``securetrack.cli``); and
+* an Audacity bridge (``securetrack.audacity_bridge``) that drives
+  Audacity over its ``mod-script-pipe`` scripting interface.
 
-| Concern               | Choice                  | Rationale                                                |
-|-----------------------|-------------------------|----------------------------------------------------------|
-| Symmetric primitive   | **AES-256-GCM**         | Authenticated encryption in a single primitive; widely audited; in `cryptography.hazmat.primitives.ciphers.aead`. |
-| Content key           | 32 random bytes         | Drawn from `os.urandom`; one per package; never reused.  |
-| Chunk size            | 1 MiB (default)         | Trade-off between per-chunk overhead (~16 B tag) and memory. |
-| Per-chunk nonce       | 8 random bytes prefix `\|\|` 4-byte BE counter | Guarantees uniqueness within a package without storing 12 bytes per chunk. |
-| Per-chunk AAD         | metadata bytes `\|\|` u32(index) `\|\|` u32(num_chunks) | Binds chunk position; chunks cannot be reordered, dropped or replayed. |
-| Passphrase recipient KDF | **Scrypt** (n=2¹⁵, r=8, p=1, len=32) | Memory-hard; OWASP-recommended for password-derived keys. |
-| Pubkey recipient ECDH | **X25519** (`exchange`) | Standard, fast, constant-time; raw 32-byte keys.        |
-| Pubkey recipient KDF | **HKDF-SHA256**         | Bind the wrapping key to ``info = "securetrack-x25519-wrap-v2" \|\| ephemeral_pub \|\| recipient_pub`` so the same shared secret cannot be reused outside this protocol. |
-| Wrap nonce / wrap tag | 12-byte AES-GCM nonce, 16-byte tag | Standard GCM. AAD = canonical metadata bytes. |
-| Signature             | **Ed25519**             | Deterministic, fast, small public key, well-supported. |
-| Signed message        | metadata `\|\|` SHA-256(recipients.json) `\|\|` SHA-256(ciphertext) | Binds the *whole* package to the signature without circular dependencies. |
+This is a **bridge-based Audacity plugin prototype**: it integrates
+with Audacity through the public scripting interface rather than
+being compiled into Audacity as a native C++ plug-in.
 
-### 2.1 Per-recipient wrapping in detail
+## 2. Design objectives
 
-```
-content_key = random 32 bytes
+The prototype was designed against four objectives drawn from the
+problem statement:
 
-# passphrase recipient
-salt        = random 16 bytes
-wrap_key    = Scrypt(passphrase, salt, n=2^15, r=8, p=1, len=32)
-wrap_nonce  = random 12 bytes
-wrapped     = AES-GCM-Encrypt(wrap_key, wrap_nonce, content_key, AAD=metadata)
+1. **Local encryption.** The audio must be encrypted on the sender's
+   machine before it ever leaves the device. The user's existing
+   sharing channel (email, Dropbox, WeTransfer) is treated as
+   untrusted.
+2. **Authenticity and integrity.** A recipient must be able to
+   detect any modification of the package, no matter how small.
+3. **Sit alongside the production workflow.** The application has
+   to fit a normal Audacity export workflow without forcing
+   collaborators to learn cryptography vocabulary.
+4. **Reproducible evaluation.** The implementation has to expose
+   timing, throughput and correctness measurements so the
+   dissertation evaluation chapter can be repeated by anyone.
 
-# X25519 pubkey recipient
-ephemeral_priv, ephemeral_pub = X25519.generate()
-shared      = X25519(ephemeral_priv, recipient_pub)              # 32 bytes
-info        = b"securetrack-x25519-wrap-v2" || ephemeral_pub || recipient_pub
-wrap_key    = HKDF-SHA256(shared, info=info, length=32)
-wrap_nonce  = random 12 bytes
-wrapped     = AES-GCM-Encrypt(wrap_key, wrap_nonce, content_key, AAD=metadata)
-```
-
-The recipient unwraps by reversing the appropriate path: derive the
-same Scrypt key (passphrase) or recompute the X25519 shared secret
-(pubkey), then AES-GCM-Decrypt the wrapped content key.
-
-### 2.2 Why AES-GCM and not ChaCha20-Poly1305?
-
-GCM was chosen because (a) it is the format students encounter in
-standard cryptography modules at Surrey, (b) it is hardware
-accelerated on every machine the dissertation will run on, and (c) the
-nonce/key handling is straightforward in this setting (per-chunk
-nonce reuse is impossible because the prefix is fresh per package).
-ChaCha20-Poly1305 is a perfectly good alternative and could be swapped
-in by changing one import.
-
-### 2.3 Why X25519 + HKDF + AES-GCM and not age?
-
-`age` (the modern CLI tool) implements essentially the same
-construction as we use here. We re-implemented it directly for two
-reasons: (1) we can author the dissertation chapter end-to-end without
-hand-waving, and (2) we keep a single dependency (`cryptography`)
-rather than pulling in an opinionated CLI tool.
-
-## 3. Package format `.securetrack` v2
-
-A v2 package is a ZIP archive (`ZIP_STORED`, no compression) with
-three required members and one optional member:
-
-| Member                  | Required | Description                                       |
-|-------------------------|----------|---------------------------------------------------|
-| `metadata.json`         | yes      | UTF-8 JSON; also AES-GCM AAD for every chunk and every recipient wrap. |
-| `recipients.json`       | yes      | List of wrapped content-key entries.              |
-| `encrypted_audio.bin`   | yes      | Concatenated AES-256-GCM chunks (`ct_i \|\| tag_i`). |
-| `signature.bin`         | optional | Ed25519 signature when the sender provided a signing key. |
-
-### 3.1 Metadata schema
-
-```json
-{
-  "format_version":      2,
-  "algorithm":           "AES-256-GCM",
-  "kdf":                 "scrypt",
-  "kdf_params":          {"n": 32768, "r": 8, "p": 1, "length": 32},
-  "chunk_size":          1048576,
-  "num_chunks":          5,
-  "nonce_prefix":        "<base64 8 bytes>",
-  "original_filename":   "sample.wav",
-  "original_size_bytes": 4194304,
-  "sha256_original":     "<hex 64>",
-  "created_utc":         "2026-05-04T22:47:12Z",
-  "tool_version":        "0.2.0",
-  "labels":              {"project": "demo"},
-  "creator":             {"name": "alice"},
-  "signature_algorithm": "Ed25519",
-  "signing_pubkey":      "<base64 32 bytes>"
-}
-```
-
-`signature_algorithm` and `signing_pubkey` are present only when the
-package was signed.
-
-The metadata is serialised with
-`json.dumps(..., sort_keys=True, separators=(",", ":"))` so that the
-bytes used as AAD are deterministic across implementations.
-
-> **Why no `ciphertext_sha256` in the metadata?**
-> If the ciphertext digest were part of the metadata, and the
-> metadata is the AAD for every chunk, then any change to the digest
-> would change the GCM tags and therefore the ciphertext, creating a
-> non-converging fixed-point loop. The signature already binds the
-> ciphertext digest in its signed message, so we don't need to store
-> it.
-
-### 3.2 Recipients schema
-
-```json
-{
-  "recipients": [
-    {
-      "type":        "passphrase",
-      "kind":        "scrypt",
-      "salt":        "<base64 16>",
-      "wrap_nonce":  "<base64 12>",
-      "wrapped_key": "<base64 48>",
-      "label":       "fallback"
-    },
-    {
-      "type":             "pubkey",
-      "kind":             "x25519",
-      "recipient_pubkey": "<base64 32>",
-      "ephemeral_pubkey": "<base64 32>",
-      "wrap_nonce":       "<base64 12>",
-      "wrapped_key":      "<base64 48>",
-      "label":            "bob"
-    }
-  ]
-}
-```
-
-Decryption tries pubkey entries first (cheap) and falls back to
-passphrase entries (slow because of Scrypt).
-
-### 3.3 Ciphertext layout
+## 3. Architecture
 
 ```
-encrypted_audio.bin =
-    chunk_0_ciphertext || chunk_0_tag    (chunk_size + 16 bytes)
-    chunk_1_ciphertext || chunk_1_tag    (chunk_size + 16 bytes)
-    ...
-    chunk_{n-1}_ciphertext || chunk_{n-1}_tag   (last chunk may be shorter)
+                   ┌───────────────────────────────┐
+                   │   securetrack.gui (Tkinter)   │
+                   │   securetrack.cli (argparse)  │
+                   └───────────────┬───────────────┘
+                                   │
+            ┌──────────────────────┼──────────────────────┐
+            ▼                      ▼                      ▼
+  ┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐
+  │ audacity_bridge   │  │ package           │  │ benchmark         │
+  │ (mod-script-pipe) │  │ (.securetrack     │  │ (timing + CSV)    │
+  │                   │  │  archive format)  │  │                   │
+  └───────────────────┘  └────────┬──────────┘  └───────────────────┘
+                                  │
+            ┌─────────────────────┼─────────────────────┐
+            ▼                     ▼                     ▼
+   ┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+   │ recipients    │    │ keys          │    │ crypto        │
+   │ (per-recipient│    │ (X25519,      │    │ (AES-GCM,     │
+   │  wrap)        │    │  Ed25519 PEM) │    │  Scrypt, HKDF)│
+   └───────────────┘    └───────────────┘    └───────────────┘
 ```
 
-For chunk `i`:
+The dependency graph is strictly downward. ``crypto`` knows nothing
+about packages; ``package`` knows nothing about user interfaces;
+``audacity_bridge`` and ``benchmark`` use ``package`` but are
+independent of each other. Each module can be tested on its own.
+
+## 4. Manual WAV workflow
 
 ```
-nonce_i = nonce_prefix (8 B) || u32_be(i)        # 12 B AES-GCM nonce
-aad_i   = metadata_bytes || u32_be(i) || u32_be(num_chunks)
-ct_i    = AES-256-GCM-Encrypt(content_key, nonce_i, plaintext_i, aad_i)
+   Audacity project  ──File ▸ Export──►  exported.wav
+                                            │
+                                            ▼
+                            securetrack encrypt / GUI
+                                            │
+                                            ▼
+                                   share.securetrack
 ```
 
-A reader knows `chunk_size`, `num_chunks` and `original_size_bytes`
-from the metadata, so it can deterministically split
-`encrypted_audio.bin` into per-chunk ciphertext slices.
+This is the simplest path and works with any version of Audacity. It
+makes no assumptions about scripting modules and lets the user pick
+their own export format options.
 
-### 3.4 Signature
-
-```
-sig_msg   = metadata_bytes || b"|" || SHA-256(recipients.json) || b"|" || SHA-256(ciphertext)
-signature = Ed25519-Sign(signing_priv, sig_msg)
-```
-
-`signing_pubkey` is recorded in the metadata. Verification re-computes
-`sig_msg` from the freshly read members and checks the signature
-against the recorded (or out-of-band-supplied) public key.
-
-### 3.5 Expected overhead
-
-| Component                | Approx. size |
-|--------------------------|--------------|
-| ZIP central directory    | ~250 B (3–4 members) |
-| `metadata.json`          | ~600–900 B   |
-| `recipients.json`        | ~250 B per recipient |
-| AES-GCM tag per chunk    | 16 B (× num_chunks) |
-| `signature.bin`          | 64 B (only when signed) |
-
-For a 5 MiB WAV with one passphrase recipient, no signature, default
-chunk size: about 1.1 KB overhead total (~0.02 %).
-
-## 4. Module map
+## 5. Audacity bridge workflow
 
 ```
-crypto.py          AES-GCM (one-shot + chunked), Scrypt, HKDF, Ed25519
-keys.py            X25519 / Ed25519 keypair generation + PEM I/O
-recipients.py      wrap/unwrap content key for passphrase / X25519
-package.py         v2 format read/write, ties everything together
-metrics.py         pure size / throughput helpers
-benchmark.py       glue: timing + tamper test + CSV row
-cli.py             argparse front-end (keygen / encrypt / decrypt / inspect / benchmark)
-gui.py             Tkinter GUI (progress bar, recipient list, signing fields)
-audacity_bridge.py mod-script-pipe driver + secure_export_from_audacity
+   Audacity project ──mod-script-pipe──►  SelectAll
+                                          Export2 → temp/render.wav
+                                            │
+                                            ▼
+                                  securetrack encrypt
+                                            │
+                                            ▼
+                                   share.securetrack
+                                            │
+                                            ▼
+                       temp/render.wav (overwritten + unlinked)
 ```
 
-The dependency graph is strictly downward: `crypto` knows nothing
-about packages; `keys` knows nothing about recipients;
-`recipients` and `package` use both of the above; `cli`, `gui` and
-`audacity_bridge` are user-facing. Each layer can be tested in
-isolation.
+The bridge issues two commands over Audacity's named pipe:
 
-## 5. Threat model (informal)
+* ``SelectAll:`` so that *Export2* picks up every track. Without it,
+  Audacity exports only the current selection — often empty when
+  the user has just opened a project — which manifests as a
+  near-empty WAV. The bridge surfaces that with a clear error
+  ("Audacity exported an empty or near-empty WAV. Make sure the
+  project contains audio.").
+* ``Export2: Filename="<path>" NumChannels=2`` to render the
+  project to a temporary WAV.
 
-**In scope.**
-* A passive eavesdropper on the transport channel reading the
-  contents of a `.securetrack` file.
-* An adversary tampering with bytes of the file in transit (flipping
-  bits, replacing the ciphertext, modifying the metadata or the
-  recipients list, swapping or dropping individual chunks).
-* A storage provider holding the file at rest who tries to read it.
-* A recipient trying to brute-force a passphrase recipient offline
-  (mitigated by Scrypt cost; ultimately bounded by passphrase
-  entropy).
-* An impersonation attack where a third party sends a forged
-  `.securetrack` file pretending to come from the sender (mitigated
-  by Ed25519 signatures and the `--expect-signed-by` flag).
+On Windows the named pipes live in the NT object namespace
+(``\\.\pipe\ToSrvPipe`` / ``\\.\pipe\FromSrvPipe``), which means
+``Path.exists`` always reports them missing and Python's text-mode
+``open`` cannot drive them. The bridge therefore uses ``pywin32``
+(``win32pipe.WaitNamedPipe`` / ``win32file.CreateFile`` /
+``WriteFile`` / ``PeekNamedPipe`` / ``ReadFile``) on Windows and
+plain FIFO ``open()`` on POSIX. The Windows protocol terminator is
+``\r\n\0`` rather than ``\n``; the bridge picks the right end-of-line
+automatically.
 
-**Out of scope.**
-* Compromise of the sender or recipient endpoint while plaintext is
-  in memory.
-* Side-channel attacks on the local machine.
-* Coercion or social engineering of the passphrase / private key.
-* Recipients re-sharing the decrypted WAV after they have legitimately
-  unwrapped it.
-* Forward secrecy with respect to long-term X25519 private-key
-  compromise (every old package addressed to that key remains
-  decryptable).
+## 6. Encryption design
 
-## 6. Backlog of next steps
+### 6.1 Why local encryption
 
-1. Cloud relay with at-rest re-encryption and revocable share links.
-2. Project-level key management (one X25519 keypair per project, with
-   a membership file the sender consults at encrypt time).
-3. Header-only download + streaming decrypt so playback can start
-   before the whole package is fetched.
-4. Native Audacity menu integration via a Nyquist plug-in that calls
-   the Python bridge in a daemon process.
-5. Independent security review of the v2 format.
+The threat model assumes the *channel* (cloud storage, email
+provider, messenger) is untrusted. By encrypting on the sender's
+machine before the audio is ever uploaded, the cloud provider
+holds only ciphertext. This matches the way TLS, age, GPG-encrypted
+backups and similar tools approach the same problem.
+
+### 6.2 Why AES-GCM
+
+AES-256 in Galois/Counter Mode (GCM) was chosen because:
+
+* GCM provides confidentiality **and** authenticity in a single
+  primitive — any modification to the ciphertext or the
+  authenticated metadata invalidates the 16-byte tag and decryption
+  fails. This is exactly the property the dissertation evaluates as
+  "tamper detection".
+* It is a standard, widely audited mode available in
+  ``cryptography.hazmat.primitives.ciphers.aead.AESGCM``.
+* It is hardware-accelerated on every machine the prototype will
+  run on.
+
+### 6.3 Why Scrypt for passphrase keys
+
+Scrypt is a memory-hard key-derivation function recommended by
+OWASP for password-derived keys. The cost parameters
+(``N = 2¹⁵, r = 8, p = 1, length = 32``) give roughly a few hundred
+milliseconds and ~30 MB of memory on a modern laptop, which is fast
+enough for an interactive workflow but expensive enough to make
+offline brute force prohibitive for a passphrase of reasonable
+length.
+
+### 6.4 Why X25519 + HKDF for public-key recipients
+
+Optional public-key recipients use X25519 elliptic-curve
+Diffie–Hellman with HKDF-SHA256 to derive a wrapping key, then
+AES-GCM to wrap the per-package content key. The HKDF ``info``
+string binds the wrapping key to the protocol and to the specific
+ephemeral and recipient public keys, so the same shared secret
+cannot be reused outside this construction.
+
+## 7. Package format
+
+A ``.securetrack`` package is a standard ZIP archive with three
+required members and one optional member:
+
+| Member                  | Required | Purpose                                                   |
+|-------------------------|----------|-----------------------------------------------------------|
+| ``metadata.json``       | yes      | Algorithm names, KDF parameters, chunk size, nonce prefix, original filename and size, SHA-256 of the original audio, creation timestamp. Authenticated as AES-GCM associated data. |
+| ``recipients.json``     | yes      | One entry per recipient (passphrase or X25519 public key); each entry holds an AES-GCM-wrapped copy of the per-package content key. |
+| ``encrypted_audio.bin`` | yes      | Concatenated AES-256-GCM chunks. Each chunk authenticates the metadata, its index and the chunk count, so chunks cannot be reordered, dropped or replayed. |
+| ``signature.bin``       | optional | Ed25519 signature over the metadata, the SHA-256 of ``recipients.json`` and the SHA-256 of the ciphertext. Present only when the sender supplied a signing key. |
+
+A reader can deterministically split the ciphertext into per-chunk
+slices because ``chunk_size``, ``num_chunks`` and the original size
+are all in the metadata. Default chunk size is 1 MiB; smaller files
+fit in a single chunk.
+
+ZIP was chosen over a bespoke binary format because it is
+inspectable with standard tools, robust, and adds only a few
+hundred bytes of overhead. Inspecting the metadata of a package
+without decrypting it (``securetrack inspect --json``) is
+intentional — it lets a recipient see what the package claims to
+contain before typing a passphrase.
+
+## 8. Key management
+
+Key material is stored as PEM files using ``cryptography``'s
+serialisation helpers. Private key files can optionally be
+encrypted at rest with a passphrase (PKCS#8 with the best available
+encryption). On POSIX the private file is written with mode ``0o600``
+to discourage casual exposure.
+
+Keys are generated through the ``securetrack keygen`` subcommand:
+
+```
+python -m securetrack.cli keygen --kind x25519 --private-out priv.pem --public-out pub.pem
+python -m securetrack.cli keygen --kind ed25519 --private-out sign.pem --public-out verify.pem
+```
+
+The dissertation does not propose a centralised directory of
+collaborator keys — that is listed under *Future improvements*.
+
+## 9. Integrity verification
+
+Two layers of integrity checking are applied during decryption:
+
+1. **AES-GCM authentication** — every ciphertext chunk and every
+   wrapped recipient key is authenticated with a 16-byte tag bound
+   to the canonical metadata as associated data. A single-bit
+   change anywhere causes decryption to fail.
+2. **SHA-256 hash check** — once the audio has been decrypted, its
+   SHA-256 is recomputed and compared against the value in the
+   metadata. The benchmark CSV records both hashes (``sha256_original``
+   and ``sha256_decrypted``) and a boolean ``hash_match`` column for
+   every run, so the dissertation evaluation can show correctness
+   directly from data.
+
+The optional Ed25519 signature adds a third layer when present:
+the recipient (or the ``--expect-signed-by`` flag) verifies that
+the package was produced by the holder of a known signing key.
+
+## 10. Temporary file handling
+
+When the Audacity bridge exports a project, it writes a temporary
+WAV to a per-call ``tempfile.TemporaryDirectory`` and overwrites
+that file with zeros (followed by ``os.fsync`` and ``unlink``)
+before returning. This is best-effort: on journalled, copy-on-write
+or wear-levelled filesystems an in-place overwrite cannot guarantee
+that no copy of the plaintext remains on the underlying storage.
+The user manual mentions this honestly.
+
+## 11. Limitations
+
+* This is a dissertation prototype, not a production-ready security
+  product, and has not been independently audited.
+* It is a bridge-based Audacity plugin prototype; it is not a
+  native C++ Audacity plug-in compiled inside Audacity.
+* Recipients must protect their passphrases and private keys; once
+  they decrypt a package, the audio is an ordinary WAV and the
+  sender cannot technically prevent further redistribution.
+* Secure deletion of temporary files is best-effort, especially on
+  SSDs and copy-on-write filesystems.
+* No cloud relay or revocable share links are implemented.
+
+## 12. Dissertation implementation summary
+
+The final prototype consists of a Python desktop application called
+**SecureTrack** and an Audacity bridge component. The application
+allows users to encrypt exported WAV files, decrypt secure packages,
+and export audio directly from Audacity using the ``mod-script-pipe``
+interface. Audio is encrypted locally before sharing using
+AES-256-GCM, with Scrypt-based passphrase key derivation and SHA-256
+integrity verification. The system produces a ``.securetrack``
+package that can be distributed through normal channels while
+keeping the audio content unreadable without the correct passphrase
+or private key. Tamper detection and hash matching are recorded for
+every benchmark run so the evaluation chapter can demonstrate
+correctness and integrity directly from data.

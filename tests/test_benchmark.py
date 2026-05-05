@@ -26,7 +26,6 @@ def test_size_overhead_percent_zero_original_does_not_divide_by_zero() -> None:
 
 
 def test_throughput_basic() -> None:
-    # 1 MB in 1 second == 1 MB/s exactly.
     assert metrics.throughput_mbps(metrics.BYTES_PER_MB, 1.0) == 1.0
 
 

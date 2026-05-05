@@ -1,4 +1,4 @@
-"""SecureTrack command line interface (v2 format).
+"""SecureTrack command line interface.
 
 Subcommands::
 
@@ -357,6 +357,7 @@ def cmd_audacity_export(args: argparse.Namespace) -> int:
             creator={"name": args.creator_name} if args.creator_name else None,
             signing_key=signing_key,
             num_channels=args.num_channels,
+            select_all=not args.no_select_all,
         )
     except audacity_bridge.AudacityPipeError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -499,6 +500,10 @@ def build_parser() -> argparse.ArgumentParser:
     ax.add_argument(
         "--num-channels", type=int, default=2,
         help="channel count for Audacity Export2 (default 2)",
+    )
+    ax.add_argument(
+        "--no-select-all", action="store_true",
+        help="don't ask Audacity to SelectAll before exporting (export selection only)",
     )
     ax.set_defaults(func=cmd_audacity_export)
 

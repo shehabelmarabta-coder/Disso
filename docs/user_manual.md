@@ -1,191 +1,132 @@
-# SecureTrack User Manual (v2 prototype)
+# SecureTrack User Manual
 
-This is the short user-facing guide for the dissertation prototype.
-For dissertation context see ``README.md`` and ``technical_design.md``.
+A short guide for non-technical users. For dissertation context see
+``../README.md`` and ``technical_design.md``.
 
-## 1. Audience
+## What SecureTrack does
 
-You have just received a ``.securetrack`` file from a collaborator,
-or you would like to send one. SecureTrack is a small command line
-and GUI tool that wraps a WAV file in a recipient-targeted package
-and unwraps it again on the other side. v2 supports two recipient
-modes:
+SecureTrack lets you share an unreleased WAV file with a collaborator
+without putting the audio in plaintext on a third-party service.
+You enter a passphrase, the application produces a sealed
+``.securetrack`` package, and your collaborator opens that package
+on the other side.
 
-* **Passphrase**: the sender and recipient share a passphrase out of
-  band (e.g. via a phone call). Simple but requires a side channel.
-* **X25519 public key**: the recipient publishes a public key once;
-  the sender encrypts to that key with no shared secret. Recommended.
+The application has three tabs:
 
-A package may also be **signed** by the sender with an Ed25519 key,
-so a recipient can verify it really came from them.
+* **Encrypt WAV** — turn an existing WAV into a ``.securetrack`` package.
+* **Decrypt Package** — recover the WAV from a ``.securetrack`` package.
+* **Audacity Export** — export the audio that is currently open in
+  Audacity and encrypt it in one step.
 
-## 2. Installation
+## 1. Opening SecureTrack
 
-```bash
-git clone <this repository>
-cd secure-audacity-track-sharing
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+* On Windows, double-click ``run_securetrack.bat`` in the project
+  folder.
+* On macOS / Linux, or as a fallback on Windows, run:
 
-python -m securetrack.cli --version
-```
+  ```
+  python -m securetrack.gui
+  ```
 
-## 3. Generating keypairs (one-time setup)
+The window opens with the three tabs above. The *Ready.* line at
+the bottom turns into a progress message while the application is
+working.
 
-You only need to do this the first time you use the tool.
+## 2. Encrypting a WAV file
 
-```bash
-# Long-term X25519 keypair for receiving encrypted files
-python -m securetrack.cli keygen --kind x25519 \
-    --private-out ~/.securetrack/me.priv.pem \
-    --public-out  ~/.securetrack/me.pub.pem \
-    --encrypt-private        # prompts for a passphrase to protect the file at rest
+Use this tab when you already have a WAV file you want to share.
 
-# (Optional) Ed25519 signing keypair if you want recipients to verify
-# that packages came from you.
-python -m securetrack.cli keygen --kind ed25519 \
-    --private-out ~/.securetrack/me.sign.pem \
-    --public-out  ~/.securetrack/me.verify.pem \
-    --encrypt-private
-```
+1. Click **Browse…** next to *Input WAV file* and choose the file.
+2. The *Save secure package to* field is filled in for you with a
+   sensible default. Change it if you want to.
+3. Type a passphrase next to *Recipient passphrase*. Make it at least
+   12 characters and share it with your collaborator through a
+   **different** channel — for example a phone call or a different
+   messaging app — never in the same email as the file itself.
+4. Click **Encrypt**.
 
-Send the **`*.pub.pem`** and **`*.verify.pem`** files to your
-collaborators. Keep the **`*.priv.pem`** and **`*.sign.pem`** files
-private.
+When the operation finishes a dialog confirms it and lists the
+output file, original size and SHA-256 fingerprint of the audio.
 
-## 4. Sending a WAV to a collaborator (sender side)
+## 3. Decrypting a secure package
 
-1. Export your project from Audacity:
-   *File ▸ Export ▸ Export as WAV* into any folder you like.
-2. Encrypt the file. Two common modes:
+Use this tab when you receive a ``.securetrack`` file from someone
+else.
 
-   **Public-key mode (recommended).** Bob already gave you `bob.pub.pem`:
+1. Click **Browse…** next to *Input secure package* and choose the
+   file.
+2. The *Save recovered WAV to* field is filled in automatically.
+3. Type the passphrase your collaborator sent you.
+4. Click **Decrypt**.
 
-   ```bash
-   python -m securetrack.cli encrypt \
-       -i exported.wav -o for-bob.securetrack \
-       --recipient bob.pub.pem \
-       --signing-key ~/.securetrack/me.sign.pem \
-       --label project=demo --creator-name alice
-   ```
+If your collaborator used an X25519 public key instead of a
+passphrase, open the *Advanced (optional)* section and pick your
+private key file (``.pem``) there.
 
-   **Passphrase mode (no shared key infrastructure).**
+If the passphrase is wrong, or the package has been altered on the
+way, the application reports the failure and does **not** write any
+audio.
 
-   ```bash
-   python -m securetrack.cli encrypt \
-       -i exported.wav -o share.securetrack \
-       --passphrase "12-character-or-longer-secret"
-   ```
+## 4. Connecting to Audacity
 
-3. Send the ``.securetrack`` file to your collaborator using whatever
-   transport you trust (Dropbox, WeTransfer, email…). The contents
-   are encrypted, so the storage provider cannot read them.
+Audacity comes with a small scripting interface called
+``mod-script-pipe``. SecureTrack uses it to ask Audacity for the
+audio in the project that is currently open. The interface is
+disabled by default — you only need to do this once.
 
-## 5. Receiving a `.securetrack` package (recipient side)
+### Enabling mod-script-pipe
 
-1. Save the file you received to disk.
-2. Decrypt it. Match the mode the sender used:
+1. Open Audacity.
+2. Go to *Edit ▸ Preferences ▸ Modules*.
+3. Find *mod-script-pipe* in the list and set it to **Enabled**.
+4. Click **OK** and **restart Audacity**. (The setting only takes
+   effect on restart.)
+5. Open the project you want to share.
 
-   **Public-key mode:**
+### Testing the connection
 
-   ```bash
-   python -m securetrack.cli decrypt \
-       -i for-bob.securetrack -o recovered.wav \
-       --key ~/.securetrack/me.priv.pem \
-       --expect-signed-by alice.verify.pem        # optional but recommended
-   ```
+1. In SecureTrack, open the **Audacity Export** tab.
+2. Click **Test Audacity Connection**. The label next to the button
+   changes to *Connected to Audacity.* if everything is in order.
 
-   **Passphrase mode:**
+If it says *Audacity not detected* or *Connection failed*, see
+*Common errors and fixes* below.
 
-   ```bash
-   python -m securetrack.cli decrypt \
-       -i share.securetrack -o recovered.wav \
-       --passphrase "..."
-   ```
+## 5. Exporting and encrypting from Audacity
 
-3. Open ``recovered.wav`` in Audacity (*File ▸ Open*) as you normally
-   would.
+After the connection test succeeds:
 
-If the passphrase is wrong, the wrong private key is supplied, the
-package has been tampered with, or the signature does not verify
-under ``--expect-signed-by``, decryption fails with a clear error and
-no plaintext is written.
+1. In the **Audacity Export** tab, choose where to save the
+   ``.securetrack`` package.
+2. Enter a passphrase. (Or use a recipient public key from
+   *Advanced (optional)*.)
+3. Click **Export from Audacity and Encrypt**.
 
-| Exit code | Meaning                                            |
-|-----------|----------------------------------------------------|
-| 0         | Success                                            |
-| 2         | Bad arguments (file missing, etc.)                 |
-| 3         | Cannot unwrap the content key (wrong passphrase or wrong private key) |
-| 4         | Malformed package                                  |
-| 5         | Signature did not verify                           |
+SecureTrack asks Audacity to select all tracks, exports them to a
+temporary WAV, encrypts that WAV into the secure package, and
+deletes the temporary file before reporting success. You do **not**
+need to press *Ctrl+A* or use *File ▸ Export* yourself.
 
-## 6. Inspecting a package without decrypting
+## 6. Common errors and fixes
 
-```bash
-python -m securetrack.cli inspect -i share.securetrack --json
-```
+| What you see                                  | What it usually means                                                              | What to do                                                                                                                                       |
+|-----------------------------------------------|------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| *Audacity not detected.*                      | Audacity is not running, or it has not been opened since you enabled the module.   | Open Audacity, enable *mod-script-pipe* in *Preferences ▸ Modules*, **restart Audacity**, then click *Test Audacity Connection* again.           |
+| *Connection failed.* / pipe not found         | mod-script-pipe is disabled, or Audacity was started before it was enabled.        | Enable the module and **restart Audacity** so the pipes are created.                                                                             |
+| *Audacity exported an empty or near-empty WAV.* | The Audacity project does not contain audio yet.                                  | Open or import an audio file in Audacity, make sure it appears in the timeline, then try **Export from Audacity and Encrypt** again.            |
+| *Decryption failed: wrong passphrase or the package has been tampered with.* | Wrong passphrase, or the file changed in transit.                | Check the passphrase character-for-character. If you are sure it is correct, ask the sender to re-send the package — the file may be corrupted. |
+| *No recipient entry could be unwrapped with the supplied credentials.* | A package addressed to a public key was opened with the wrong private key. | Pick the right private key file in *Advanced (optional)*.                                                                                      |
+| *Cannot load private key* / *cannot load signing key* | The chosen ``.pem`` file is not a valid key file.                              | Pick a key generated by ``securetrack keygen``.                                                                                                  |
+| *Package signature does not verify*           | The sender signed the package with a different signing key.                        | Confirm the public key file used for *Expect signed by* matches the sender's signing key.                                                        |
 
-Prints the canonical metadata JSON: format version, original
-filename and size, SHA-256 of the original, creator, labels and
-(when signed) the signing public key. Recipient list and ciphertext
-remain encrypted.
+## 7. Tips
 
-## 7. Using the GUI
-
-```bash
-python -m securetrack.gui
-```
-
-A two-tab Tkinter window:
-
-* **Encrypt** — pick the input WAV, the output package path, an
-  optional passphrase, zero or more recipient public keys (Add /
-  Remove), and an optional Ed25519 signing key. A progress bar runs
-  while Scrypt is working.
-* **Decrypt** — pick the input package, the output WAV, and either
-  a passphrase or a private key. Optionally enforce a specific
-  signing public key.
-
-## 8. Using SecureTrack with Audacity directly
-
-If Audacity is running with the *mod-script-pipe* module enabled
-(*Edit ▸ Preferences ▸ Modules ▸ mod-script-pipe ▸ Enabled*), the
-bridge can drive an `Export2` directly without you having to use the
-File menu:
-
-```python
-from pathlib import Path
-from securetrack.audacity_bridge import secure_export_from_audacity
-from securetrack.recipients import PassphraseRecipient
-
-secure_export_from_audacity(
-    Path("share.securetrack"),
-    recipient_specs=[PassphraseRecipient("test password")],
-)
-```
-
-The temporary plaintext WAV is overwritten with zeros and unlinked
-before the function returns, even on errors.
-
-## 9. Frequently asked questions
-
-**Can I lose my private key / passphrase?**
-Yes. There is no recovery mechanism by design — that would defeat
-end-to-end encryption. Back up `*.priv.pem` and store passphrases in
-a password manager.
-
-**Can the recipient share the decrypted file further?**
-Yes. Once decrypted, the WAV is an ordinary file. SecureTrack
-protects the file *in transit and at rest*, not after a recipient
-chooses to redistribute it.
-
-**Why is the first encryption noticeably slower than the second one?**
-Scrypt key derivation runs once per *passphrase recipient*. Pubkey
-recipients use X25519 + HKDF, which take microseconds. If you only
-add pubkey recipients, encryption is essentially as fast as raw
-AES-GCM.
-
-**Where are the benchmark numbers?**
-See ``results/benchmark_results.csv`` after running the
-``benchmark`` command, or ``docs/evaluation_plan.md`` for the
-methodology.
+* **Pick strong passphrases.** A 12-character random passphrase is
+  much stronger than a short clever phrase.
+* **Send the passphrase out of band.** Don't put it in the same
+  email or message as the package.
+* **Keep your private key safe.** If you use the public-key option,
+  back up your ``.pem`` file. There is no recovery if you lose it.
+* **Don't share the recovered WAV.** SecureTrack protects the file
+  while it is in transit and at rest. Once a recipient decrypts it,
+  it is an ordinary WAV again.

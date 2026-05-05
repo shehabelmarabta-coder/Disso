@@ -380,11 +380,33 @@ class AudacityScriptPipe:
         target_path: Path,
         *,
         num_channels: int = 2,
+        select_all: bool = True,
+        min_bytes: int = 1024,
         timeout_seconds: float = 60.0,
     ) -> Path:
-        """Drive Audacity to export the active project to ``target_path`` as WAV."""
+        """Drive Audacity to export the active project to ``target_path`` as WAV.
+
+        ``select_all`` (default True) sends Audacity's ``SelectAll:`` command
+        before ``Export2:``. Without it Audacity exports only the current
+        selection, which is often empty when the user has just opened a
+        project — in that case Audacity silently writes a near-empty WAV.
+
+        ``min_bytes`` is the smallest exported file we accept; anything
+        smaller is treated as "no audio in the project" and reported with a
+        clear error.
+        """
         target_path = Path(target_path).resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if select_all:
+            sel_response = self.send_command(
+                "SelectAll:", timeout_seconds=timeout_seconds
+            )
+            if "Failed" in sel_response:
+                raise AudacityPipeError(
+                    f"Audacity SelectAll failed:\n{sel_response.strip()}"
+                )
+
         command = f'Export2: Filename="{target_path}" NumChannels={int(num_channels)}'
         response = self.send_command(command, timeout_seconds=timeout_seconds)
         if "Failed" in response:
@@ -392,6 +414,11 @@ class AudacityScriptPipe:
         if not target_path.is_file():
             raise AudacityPipeError(
                 f"Audacity claimed success but {target_path} was not created."
+            )
+        if target_path.stat().st_size < min_bytes:
+            raise AudacityPipeError(
+                "Audacity exported an empty or near-empty WAV. "
+                "Make sure the project contains audio."
             )
         return target_path
 
@@ -513,12 +540,17 @@ def secure_export_from_audacity(
     signing_key: Ed25519PrivateKey | None = None,
     pipe_paths: PipePaths | None = None,
     num_channels: int = 2,
+    select_all: bool = True,
 ) -> Path:
     """Export the current Audacity project and seal the WAV in a package.
 
     The temporary WAV is created in a per-call temp directory and is
     securely deleted (overwritten with zeros, then unlinked) before
     this function returns, regardless of success or failure.
+
+    ``select_all`` (default True) automatically selects every track in
+    Audacity before the export, so the user does not have to press
+    Ctrl+A in the Audacity window first.
     """
     target_package = Path(target_package)
     target_package.parent.mkdir(parents=True, exist_ok=True)
@@ -528,7 +560,11 @@ def secure_export_from_audacity(
         try:
             with AudacityScriptPipe.connect(pipe_paths) as pipe:
                 pipe.ping()
-                pipe.export_wav(tmp_wav, num_channels=num_channels)
+                pipe.export_wav(
+                    tmp_wav,
+                    num_channels=num_channels,
+                    select_all=select_all,
+                )
 
             package.encrypt_file(
                 tmp_wav,
