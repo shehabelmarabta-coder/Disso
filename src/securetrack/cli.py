@@ -2,12 +2,14 @@
 
 Subcommands::
 
-    keygen     Generate an X25519 (encryption) or Ed25519 (signing) keypair.
-    encrypt    Wrap a WAV in a .securetrack package (passphrase / pubkey
-               recipients, optional Ed25519 signature).
-    decrypt    Unwrap a .securetrack package back into the original WAV.
-    inspect    Print the metadata of a package without decrypting it.
-    benchmark  One-shot encrypt+decrypt+tamper benchmark.
+    keygen           Generate an X25519 (encryption) or Ed25519 (signing) keypair.
+    encrypt          Wrap a WAV in a .securetrack package (passphrase / pubkey
+                     recipients, optional Ed25519 signature).
+    decrypt          Unwrap a .securetrack package back into the original WAV.
+    inspect          Print the metadata of a package without decrypting it.
+    benchmark        One-shot encrypt+decrypt+tamper benchmark.
+    audacity-test    Probe the Audacity mod-script-pipe and send a Help command.
+    audacity-export  Export the active Audacity project and seal it in one step.
 
 Run ``python -m securetrack.cli --help`` (or any subcommand with ``--help``)
 for the full usage.
@@ -22,7 +24,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import __version__, benchmark, crypto, keys, package, recipients
+from . import __version__, audacity_bridge, benchmark, crypto, keys, package, recipients
 
 
 # --- helpers ---------------------------------------------------------------
@@ -284,6 +286,85 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     return 0 if (metrics.hash_match and metrics.tamper_detection_passed) else 1
 
 
+# --- subcommand: audacity-test ---------------------------------------------
+
+
+def cmd_audacity_test(args: argparse.Namespace) -> int:
+    """Probe the Audacity bridge and send a single Help command."""
+    status = audacity_bridge.runtime_status()
+    print("SecureTrack <-> Audacity bridge status")
+    print("--------------------------------------")
+    for key in (
+        "platform",
+        "to_pipe",
+        "from_pipe",
+        "pywin32_installed",
+        "pywin32_error",
+        "available",
+    ):
+        if key in status:
+            print(f"  {key:<20s}: {status[key]}")
+
+    if status["available"] != "yes":
+        print()
+        print("Pipes are not available. Make sure Audacity is running with")
+        print("mod-script-pipe enabled (Edit ▸ Preferences ▸ Modules), and")
+        print("on Windows that pywin32 is installed (`pip install pywin32`).")
+        return 6
+
+    print()
+    print("Connecting and sending: Help: Command=Help")
+    try:
+        with audacity_bridge.AudacityScriptPipe.connect(timeout_seconds=args.timeout) as pipe:
+            response = pipe.ping()
+    except audacity_bridge.AudacityPipeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 7
+
+    print("---- Audacity response ----")
+    sys.stdout.write(response)
+    if not response.endswith("\n"):
+        print()
+    print("---------------------------")
+    return 0
+
+
+# --- subcommand: audacity-export -------------------------------------------
+
+
+def cmd_audacity_export(args: argparse.Namespace) -> int:
+    """Drive Audacity to export the project, then encrypt the WAV."""
+    output_path = Path(args.output)
+    specs = _gather_recipients(args)
+
+    signing_key = None
+    if args.signing_key:
+        try:
+            signing_key = keys.load_ed25519_private(
+                Path(args.signing_key),
+                passphrase=args.signing_key_passphrase,
+            )
+        except (ValueError, OSError) as exc:
+            print(f"error: cannot load signing key: {exc}", file=sys.stderr)
+            return 2
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = audacity_bridge.secure_export_from_audacity(
+            output_path,
+            recipient_specs=specs,
+            labels=_gather_labels(args.label),
+            creator={"name": args.creator_name} if args.creator_name else None,
+            signing_key=signing_key,
+            num_channels=args.num_channels,
+        )
+    except audacity_bridge.AudacityPipeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 7
+    print(f"Exported and encrypted -> {result}")
+    return 0
+
+
 # --- argument parser -------------------------------------------------------
 
 
@@ -382,6 +463,44 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--output", "-o", required=True, help="CSV file to append results to")
     bench.add_argument("--passphrase", "-p", help="passphrase (will prompt if omitted)")
     bench.set_defaults(func=cmd_benchmark)
+
+    # audacity-test
+    at = sub.add_parser(
+        "audacity-test",
+        help="probe the Audacity mod-script-pipe and run a Help command",
+    )
+    at.add_argument(
+        "--timeout", type=float, default=5.0, help="connection timeout in seconds"
+    )
+    at.set_defaults(func=cmd_audacity_test)
+
+    # audacity-export
+    ax = sub.add_parser(
+        "audacity-export",
+        help="drive Audacity to export the active project and seal the WAV",
+    )
+    ax.add_argument("--output", "-o", required=True, help="output .securetrack file")
+    ax.add_argument(
+        "--recipient", action="append", metavar="PUB.pem",
+        help="X25519 public-key recipient (may be given multiple times)",
+    )
+    ax.add_argument("--passphrase", "-p", help="passphrase recipient")
+    ax.add_argument(
+        "--passphrase-recipient", action="store_true",
+        help="prompt for a passphrase recipient",
+    )
+    ax.add_argument("--signing-key", metavar="PRIV.pem", help="Ed25519 signing key")
+    ax.add_argument("--signing-key-passphrase", help="passphrase for signing key")
+    ax.add_argument(
+        "--label", action="append", metavar="key=value",
+        help="add a free-form label (may be given multiple times)",
+    )
+    ax.add_argument("--creator-name", help="creator name to record in the metadata")
+    ax.add_argument(
+        "--num-channels", type=int, default=2,
+        help="channel count for Audacity Export2 (default 2)",
+    )
+    ax.set_defaults(func=cmd_audacity_export)
 
     return parser
 

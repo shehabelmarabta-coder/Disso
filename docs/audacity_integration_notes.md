@@ -46,6 +46,45 @@ The pipe endpoints are then created at:
 automatically; ``is_audacity_pipe_available()`` is a cheap pre-flight
 check.
 
+### 2.1 Windows-specific notes
+
+Windows named pipes live in the NT object namespace, **not** on the
+filesystem. As a consequence:
+
+* ``pathlib.Path.exists()`` and ``os.path.exists()`` return ``False``
+  for ``\\.\pipe\ToSrvPipe`` even when the pipe is live.
+* Python's ``open(r"\\.\pipe\ToSrvPipe", "w", encoding=..., newline=...)``
+  raises ``OSError: [Errno 22] Invalid argument`` because text-mode
+  open does not understand the NT pipe namespace.
+
+The bridge therefore uses **pywin32** on Windows to drive the pipes
+through the native Win32 API:
+
+* ``win32pipe.WaitNamedPipe`` for the existence check.
+* ``win32file.CreateFile`` to open the handles.
+* ``win32file.WriteFile`` / ``ReadFile`` / ``win32pipe.PeekNamedPipe``
+  for non-blocking, timeout-aware reads.
+
+pywin32 is declared as a conditional dependency in ``pyproject.toml``:
+
+```
+dependencies = [
+    "cryptography>=41.0.0",
+    "pywin32>=306; platform_system == 'Windows'",
+]
+```
+
+so ``pip install -e ".[dev]"`` pulls it in automatically on Windows.
+If pywin32 is missing the bridge falls back to a plain
+``open()``-based driver that mirrors Audacity's own
+``scripts/piped-work/pipe_test.py``. The fallback works in many
+environments but cannot enforce read timeouts; the user is warned on
+stderr that pywin32 is recommended.
+
+The Windows protocol also uses a different end-of-line marker —
+``\r\n\0`` (CRLF + NUL) instead of ``\n``. The bridge picks the right
+EOL automatically.
+
 ## 3. Protocol cheat-sheet
 
 The pipe is line-oriented and ASCII. Each command is a single line
@@ -73,6 +112,23 @@ The two commands the bridge currently uses:
 
 The bridge does not yet expose other commands such as
 ``GetInfo: Type=Tracks``; they would be straightforward additions.
+
+## 3.1 CLI surface
+
+Two SecureTrack subcommands wrap the bridge:
+
+```
+# Probe everything: pipe paths, detection, ping.
+python -m securetrack.cli audacity-test
+
+# Drive Audacity to export the active project, then encrypt the WAV
+# in one go (temporary plaintext is overwritten and unlinked).
+python -m securetrack.cli audacity-export \
+    --recipient bob.pub.pem \
+    --output    results/audacity_bridge_test.securetrack
+```
+
+``audacity-test`` is the recommended first step on a new machine.
 
 ## 4. Bridge API
 

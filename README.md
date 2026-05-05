@@ -190,11 +190,27 @@ threads so the main loop stays responsive while Scrypt runs.
 
 * **Manual workflow (works today):** export a WAV from Audacity
   (*File ▸ Export ▸ Export as WAV*) and run SecureTrack on the file.
-* **Native bridge (works today, requires Audacity with mod-script-pipe
-  enabled):** call
-  ``securetrack.audacity_bridge.secure_export_from_audacity``. It
-  drives ``Export2`` over the script pipe, encrypts the resulting WAV,
-  then securely deletes the temporary plaintext.
+* **Native bridge (works today on Linux, macOS and Windows):** call
+  ``securetrack.audacity_bridge.secure_export_from_audacity`` or use
+  the CLI shortcut below. It drives ``Export2`` over
+  ``mod-script-pipe``, encrypts the resulting WAV, then securely
+  deletes the temporary plaintext.
+
+```bash
+# Smoke test: confirm Audacity is reachable.
+python -m securetrack.cli audacity-test
+
+# Export the active Audacity project and seal it in one step.
+python -m securetrack.cli audacity-export \
+    --recipient keys/bob.pub.pem \
+    --output    results/audacity_bridge_test.securetrack
+```
+
+**Windows requires pywin32** (installed automatically on Windows by
+``pip install -e ".[dev]"``). Windows named pipes live in the NT
+object namespace, so ``Path.exists()`` and text-mode ``open()`` both
+fail against ``\\.\pipe\ToSrvPipe``; the bridge therefore uses
+``win32pipe.WaitNamedPipe`` + ``win32file.CreateFile`` directly.
 
 See ``docs/audacity_integration_notes.md`` for the protocol details
 and known caveats (temporary plaintext on disk, pipe authentication

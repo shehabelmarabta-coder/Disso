@@ -28,6 +28,10 @@ dependencies = [
     # AESGCM and Scrypt have been stable in cryptography since 2.x; we
     # require 41.0 to align with what most current Linux distros ship.
     "cryptography>=41.0.0",
+    # On Windows we need pywin32 for proper named-pipe I/O against
+    # Audacity's mod-script-pipe. Conditional marker so it is only
+    # installed on Windows (no-op everywhere else).
+    "pywin32>=306; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
