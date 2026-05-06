@@ -109,9 +109,8 @@ def _do_encrypt(req: _EncryptRequest) -> str:
         recipient_specs=[recipients.PassphraseRecipient(passphrase=req.passphrase)],
     )
     return (
-        f"Wrote {req.output_path.name}\n"
-        f"Original size: {metadata.original_size_bytes:,} bytes\n"
-        f"SHA-256: {metadata.sha256_original[:16]}…"
+        f"Saved {req.output_path.name}\n"
+        f"Original audio: {metadata.original_size_bytes:,} bytes"
     )
 
 
@@ -127,7 +126,7 @@ def _do_decrypt(req: _DecryptRequest) -> str:
     )
     return (
         f"Recovered {metadata.original_filename}\n"
-        f"Saved to: {req.output_path}\n"
+        f"Saved to {req.output_path}\n"
         f"Size: {metadata.original_size_bytes:,} bytes"
     )
 
@@ -143,17 +142,14 @@ def _do_audacity_export(req: _AudacityExportRequest) -> str:
         specs.append(recipients.PassphraseRecipient(passphrase=req.passphrase))
     if not specs:
         raise ValueError(
-            "Please supply a passphrase or a recipient public key in Advanced."
+            "Please supply a passphrase, or pick a recipient public key in Advanced."
         )
 
     result = audacity_bridge.secure_export_from_audacity(
         req.output_path,
         recipient_specs=specs,
     )
-    return (
-        f"Exported audio from Audacity and encrypted it.\n"
-        f"Saved to: {result}"
-    )
+    return f"Exported and encrypted.\nSaved to {result}"
 
 
 # --- application factory --------------------------------------------------
@@ -184,30 +180,43 @@ def _make_app_class() -> type:
         # ---- top-level layout -------------------------------------------
 
         def _build_layout(self) -> None:
+            # A subtle accent so the app does not feel like a plain ttk
+            # form. Stays cross-platform and uses Tk's default theme.
+            self._accent = "#1f6feb"
+
             outer = ttk.Frame(self, padding=14)
             outer.pack(fill="both", expand=True)
 
-            ttk.Label(
-                outer, text="SecureTrack", font=("TkDefaultFont", 14, "bold"),
-            ).pack(anchor="w")
-            ttk.Label(
-                outer,
+            header = tk.Frame(outer, background=self._accent)
+            header.pack(fill="x")
+            tk.Label(
+                header, text="SecureTrack",
+                background=self._accent, foreground="white",
+                font=("TkDefaultFont", 15, "bold"),
+                padx=12, pady=8, anchor="w",
+            ).pack(side="left")
+            tk.Label(
+                header,
                 text="Secure encrypted audio sharing for Audacity",
-                foreground="#555",
-            ).pack(anchor="w", pady=(0, 10))
+                background=self._accent, foreground="white",
+                padx=4, pady=8,
+            ).pack(side="left")
+
+            ttk.Frame(outer).pack(pady=(0, 10))  # spacer
 
             tabs = ttk.Notebook(outer)
             tabs.pack(fill="both", expand=True)
             tabs.add(self._build_workflow_tab(tabs), text="Audacity Workflow")
-            tabs.add(self._build_encrypt_tab(tabs), text="Encrypt WAV")
+            tabs.add(self._build_encrypt_tab(tabs), text="Encrypt Existing WAV")
             tabs.add(self._build_decrypt_tab(tabs), text="Decrypt Package")
 
             self.progress = ttk.Progressbar(outer, mode="indeterminate")
             self.progress.pack(fill="x", pady=(10, 4))
             self.status_var = tk.StringVar(value="Ready.")
-            ttk.Label(outer, textvariable=self.status_var, foreground="#444").pack(
-                anchor="w"
+            self.status_label = ttk.Label(
+                outer, textvariable=self.status_var, foreground="#444"
             )
+            self.status_label.pack(anchor="w")
 
         # ---- tab 1: Audacity Workflow -----------------------------------
 
@@ -402,9 +411,9 @@ def _make_app_class() -> type:
                 frame, 3, "Recipient passphrase:", self.enc_passphrase
             )
 
-            ttk.Button(frame, text="Encrypt", command=self.on_encrypt).grid(
-                row=4, column=0, columnspan=3, pady=(18, 0), sticky="we"
-            )
+            ttk.Button(
+                frame, text="Create Secure Package", command=self.on_encrypt,
+            ).grid(row=4, column=0, columnspan=3, pady=(18, 0), sticky="we")
             ttk.Label(
                 frame,
                 text=(
@@ -450,9 +459,9 @@ def _make_app_class() -> type:
                 command=lambda: self._pick_open_pem(self.dec_private_key),
             ).grid(row=0, column=2)
 
-            ttk.Button(frame, text="Decrypt", command=self.on_decrypt).grid(
-                row=4, column=0, columnspan=3, pady=(18, 0), sticky="we"
-            )
+            ttk.Button(
+                frame, text="Open Secure Package", command=self.on_decrypt,
+            ).grid(row=4, column=0, columnspan=3, pady=(18, 0), sticky="we")
             frame.columnconfigure(1, weight=1)
             return frame
 
@@ -763,9 +772,11 @@ def _make_app_class() -> type:
                     if kind.endswith(":error"):
                         op = kind.split(":")[0]
                         self.status_var.set(self._failure_label(op))
+                        self.status_label.configure(foreground="#b00020")
                         messagebox.showerror(self._failure_title(op), str(payload))
                     else:
                         self.status_var.set(self._success_label(kind))
+                        self.status_label.configure(foreground="#1a7f37")
                         messagebox.showinfo(self._success_title(kind), str(payload))
             except queue.Empty:
                 pass

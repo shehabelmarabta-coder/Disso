@@ -76,6 +76,20 @@ The simplest end-to-end use of the prototype:
 This is the cleanest path because the export stays local and the
 audio is encrypted before it ever touches a cloud service.
 
+## Technology choices
+
+| Choice          | Why                                                                                              |
+|-----------------|---------------------------------------------------------------------------------------------------|
+| **Python 3.11** | Rapid prototyping; readable implementation suitable for a dissertation submission.                |
+| **Tkinter**     | Built-in, cross-platform desktop GUI with no extra runtime to install.                            |
+| **cryptography**| Audited primitives (AES-GCM, Scrypt, X25519, Ed25519, HKDF) with a stable Python API.             |
+| **AES-256-GCM** | Authenticated encryption — confidentiality and tamper detection in a single primitive.            |
+| **Scrypt**      | Memory-hard passphrase KDF recommended by OWASP.                                                  |
+| **SHA-256**     | Verifies that the recovered audio matches the original byte-for-byte.                              |
+| **pytest**      | Automated regression suite covering correctness, security and the watcher.                       |
+| **CSV benchmark** | Plain ``results/benchmark_results.csv`` — easy to open in Excel for the dissertation evaluation. |
+| **mod-script-pipe / watched folder** | Show workflow integration with Audacity without the risk and cost of a native C++ plug-in. |
+
 ## Key features
 
 * **Local encryption.** Audio is encrypted on the sender's machine
