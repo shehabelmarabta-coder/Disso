@@ -11,12 +11,18 @@ You enter a passphrase, the application produces a sealed
 ``.securetrack`` package, and your collaborator opens that package
 on the other side.
 
+It integrates with Audacity at the export stage. You keep using
+Audacity exactly as you do today — SecureTrack just steps in between
+the export and the upload.
+
 The application has three tabs:
 
-* **Encrypt WAV** — turn an existing WAV into a ``.securetrack`` package.
-* **Decrypt Package** — recover the WAV from a ``.securetrack`` package.
-* **Audacity Export** — export the audio that is currently open in
-  Audacity and encrypt it in one step.
+* **Audacity Workflow** — the recommended path. Watches an export
+  folder or drives Audacity directly.
+* **Encrypt WAV** — turn an existing WAV into a ``.securetrack``
+  package in one shot.
+* **Decrypt Package** — recover the WAV from a ``.securetrack``
+  package.
 
 ## 1. Opening SecureTrack
 
@@ -28,105 +34,161 @@ The application has three tabs:
   python -m securetrack.gui
   ```
 
-The window opens with the three tabs above. The *Ready.* line at
-the bottom turns into a progress message while the application is
-working.
+## 2. The Audacity Workflow tab
 
-## 2. Encrypting a WAV file
+This is the tab that opens first.
 
-Use this tab when you already have a WAV file you want to share.
+### Step 1 — Set up your local workspace
 
-1. Click **Browse…** next to *Input WAV file* and choose the file.
-2. The *Save secure package to* field is filled in for you with a
-   sensible default. Change it if you want to.
-3. Type a passphrase next to *Recipient passphrase*. Make it at least
-   12 characters and share it with your collaborator through a
-   **different** channel — for example a phone call or a different
-   messaging app — never in the same email as the file itself.
-4. Click **Encrypt**.
+1. The *Folder root* defaults to ``Documents/SecureTrack``. Leave it
+   alone, or click *Browse…* to pick somewhere else.
+2. Click **Create / Open SecureTrack Folders**. SecureTrack creates:
+   * ``Exports`` — where Audacity will write WAV files.
+   * ``Secure Packages`` — where SecureTrack writes the
+     ``.securetrack`` files.
+   * ``Recovered WAVs`` — a sensible place to save decrypted files
+     coming back the other way.
+   * ``Archive`` — used only if you choose *Move exported WAV*.
+3. The *Open Exports Folder* and *Open Secure Packages Folder*
+   buttons launch the OS file manager so you can verify what is
+   inside.
 
-When the operation finishes a dialog confirms it and lists the
-output file, original size and SHA-256 fingerprint of the audio.
+### Step 2 — Choose the recipient
 
-## 3. Decrypting a secure package
+* Type a passphrase next to *Passphrase*. Make it at least 12
+  characters and share it with your collaborator through a
+  **different** channel (e.g. a phone call, never the same email as
+  the package).
+* Optionally pick a recipient public key under
+  *Advanced (optional)*. This is for users who already use
+  ``securetrack keygen`` and prefer not to share a passphrase.
 
-Use this tab when you receive a ``.securetrack`` file from someone
-else.
+### Step 3 — Choose what to do with each exported WAV
 
-1. Click **Browse…** next to *Input secure package* and choose the
-   file.
-2. The *Save recovered WAV to* field is filled in automatically.
-3. Type the passphrase your collaborator sent you.
-4. Click **Decrypt**.
+Under *After encryption*:
 
-If your collaborator used an X25519 public key instead of a
-passphrase, open the *Advanced (optional)* section and pick your
-private key file (``.pem``) there.
+* **Keep exported WAV** *(recommended)* — the WAV stays in the
+  Exports folder. Safe choice.
+* **Move exported WAV to the Archive folder** — the WAV is moved
+  out of Exports to keep that folder tidy.
+* **Delete exported WAV** — the WAV is overwritten with zeros and
+  unlinked.
 
-If the passphrase is wrong, or the package has been altered on the
-way, the application reports the failure and does **not** write any
-audio.
+### Step 4 — Pick how SecureTrack should integrate with Audacity
 
-## 4. Connecting to Audacity
+You have two options. They use the same passphrase / recipient /
+file-handling settings.
+
+#### Option A — Watch Exports folder (recommended)
+
+The simplest path:
+
+1. Click **Start Watching Export Folder**. The status line shows
+   *Watching …*.
+2. Open Audacity and work as normal.
+3. *File ▸ Export ▸ Export as WAV* into the **Exports** folder.
+   SecureTrack detects the new file, encrypts it and writes the
+   package to **Secure Packages**.
+4. The activity log at the bottom of the tab shows each step
+   (*Detected song.wav* → *Encrypting song.wav…* → *Encrypted
+   song.wav -> song.securetrack*).
+5. When you are done, click **Stop Watching**.
+
+The watcher waits about two seconds after the WAV stops growing
+before encrypting it, so it never reads a half-written file.
+
+#### Option B — Export directly from Audacity
+
+This option uses Audacity's built-in scripting interface.
+
+1. Make sure mod-script-pipe is enabled (see *3. Connecting to
+   Audacity* below).
+2. Open the project you want to share in Audacity.
+3. Click **Test Audacity Connection**. The status next to the
+   button changes to *Connected to Audacity.* if everything is in
+   order.
+4. Click **Export from Audacity and Encrypt**, choose where to
+   save the ``.securetrack`` package, and confirm.
+
+SecureTrack asks Audacity to select all tracks, exports them to a
+temporary WAV, encrypts that WAV into the package, and deletes the
+temporary file before reporting success. You do not need to press
+*Ctrl+A* or use *File ▸ Export* yourself.
+
+## 3. Connecting to Audacity
 
 Audacity comes with a small scripting interface called
-``mod-script-pipe``. SecureTrack uses it to ask Audacity for the
-audio in the project that is currently open. The interface is
-disabled by default — you only need to do this once.
+``mod-script-pipe``. SecureTrack uses it for *Option B*. The
+interface is disabled by default and you only need to do this once.
 
 ### Enabling mod-script-pipe
 
 1. Open Audacity.
 2. Go to *Edit ▸ Preferences ▸ Modules*.
 3. Find *mod-script-pipe* in the list and set it to **Enabled**.
-4. Click **OK** and **restart Audacity**. (The setting only takes
-   effect on restart.)
+4. Click **OK** and **restart Audacity**. The setting only takes
+   effect on restart.
 5. Open the project you want to share.
 
 ### Testing the connection
 
-1. In SecureTrack, open the **Audacity Export** tab.
-2. Click **Test Audacity Connection**. The label next to the button
-   changes to *Connected to Audacity.* if everything is in order.
+In SecureTrack, click *Test Audacity Connection* on the Audacity
+Workflow tab. If it says *Audacity not detected* or *Connection
+failed*, see *Common errors and fixes* below.
 
-If it says *Audacity not detected* or *Connection failed*, see
-*Common errors and fixes* below.
+## 4. Encrypting a WAV file by hand
 
-## 5. Exporting and encrypting from Audacity
+Use the **Encrypt WAV** tab when you already have a WAV file
+somewhere on disk and just want to encrypt it without setting up
+the workflow folders:
 
-After the connection test succeeds:
+1. Click **Browse…** next to *Input WAV file* and choose the file.
+2. The output path is filled in for you. Change it if you want.
+3. Type a passphrase.
+4. Click **Encrypt**.
 
-1. In the **Audacity Export** tab, choose where to save the
-   ``.securetrack`` package.
-2. Enter a passphrase. (Or use a recipient public key from
-   *Advanced (optional)*.)
-3. Click **Export from Audacity and Encrypt**.
+## 5. Decrypting a secure package
 
-SecureTrack asks Audacity to select all tracks, exports them to a
-temporary WAV, encrypts that WAV into the secure package, and
-deletes the temporary file before reporting success. You do **not**
-need to press *Ctrl+A* or use *File ▸ Export* yourself.
+Use the **Decrypt Package** tab when you receive a ``.securetrack``
+file from someone else:
+
+1. Click **Browse…** next to *Input secure package* and choose the
+   file.
+2. The output path is filled in automatically.
+3. Type the passphrase your collaborator sent you.
+4. Click **Decrypt**.
+
+If your collaborator used an X25519 public key instead of a
+passphrase, open *Advanced (optional)* and pick your private key
+file (``.pem``) there.
 
 ## 6. Common errors and fixes
 
-| What you see                                  | What it usually means                                                              | What to do                                                                                                                                       |
-|-----------------------------------------------|------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
-| *Audacity not detected.*                      | Audacity is not running, or it has not been opened since you enabled the module.   | Open Audacity, enable *mod-script-pipe* in *Preferences ▸ Modules*, **restart Audacity**, then click *Test Audacity Connection* again.           |
-| *Connection failed.* / pipe not found         | mod-script-pipe is disabled, or Audacity was started before it was enabled.        | Enable the module and **restart Audacity** so the pipes are created.                                                                             |
-| *Audacity exported an empty or near-empty WAV.* | The Audacity project does not contain audio yet.                                  | Open or import an audio file in Audacity, make sure it appears in the timeline, then try **Export from Audacity and Encrypt** again.            |
-| *Decryption failed: wrong passphrase or the package has been tampered with.* | Wrong passphrase, or the file changed in transit.                | Check the passphrase character-for-character. If you are sure it is correct, ask the sender to re-send the package — the file may be corrupted. |
-| *No recipient entry could be unwrapped with the supplied credentials.* | A package addressed to a public key was opened with the wrong private key. | Pick the right private key file in *Advanced (optional)*.                                                                                      |
-| *Cannot load private key* / *cannot load signing key* | The chosen ``.pem`` file is not a valid key file.                              | Pick a key generated by ``securetrack keygen``.                                                                                                  |
-| *Package signature does not verify*           | The sender signed the package with a different signing key.                        | Confirm the public key file used for *Expect signed by* matches the sender's signing key.                                                        |
+| What you see                                  | What it usually means                                                              | What to do                                                                                                                             |
+|-----------------------------------------------|------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| *Audacity not detected.*                      | Audacity is not running, or it has not been opened since you enabled the module.   | Open Audacity, enable *mod-script-pipe*, **restart Audacity**, then click *Test Audacity Connection* again.                            |
+| *Connection failed.* / pipe not found         | mod-script-pipe is disabled, or Audacity was started before it was enabled.        | Enable the module and **restart Audacity** so the pipes are created.                                                                   |
+| *Audacity exported an empty or near-empty WAV.* | The Audacity project does not contain audio yet.                                 | Open or import an audio file in Audacity and try **Export from Audacity and Encrypt** again.                                            |
+| *Decryption failed: wrong passphrase or the package has been tampered with.* | Wrong passphrase, or the file changed in transit.                | Check the passphrase character-for-character. If you are sure it is correct, ask the sender to re-send the package.                    |
+| *No recipient entry could be unwrapped with the supplied credentials.* | Package addressed to a public key was opened with the wrong private key.  | Pick the right private key file in *Advanced (optional)*.                                                                              |
+| *Package signature does not verify*           | The sender signed the package with a different signing key.                        | Confirm the public key file used for *Expect signed by* matches the sender's signing key.                                              |
+| Watcher status stays *Not watching.*          | You forgot to enter a passphrase or pick a public key.                              | Fill in the *Recipient* section, then click *Start Watching Export Folder*.                                                            |
+| *Audacity is not open* / *project contains no audio* | Self-explanatory; the bridge has nothing to export.                          | Open Audacity, open or import audio, try again.                                                                                         |
 
 ## 7. Tips
 
-* **Pick strong passphrases.** A 12-character random passphrase is
-  much stronger than a short clever phrase.
-* **Send the passphrase out of band.** Don't put it in the same
-  email or message as the package.
-* **Keep your private key safe.** If you use the public-key option,
-  back up your ``.pem`` file. There is no recovery if you lose it.
-* **Don't share the recovered WAV.** SecureTrack protects the file
-  while it is in transit and at rest. Once a recipient decrypts it,
-  it is an ordinary WAV again.
+* Pick strong passphrases. A 12-character random passphrase is much
+  stronger than a short clever phrase.
+* Send the passphrase out of band — never in the same email as the
+  package.
+* Keep your private key safe. There is no recovery if you lose it.
+* Once a recipient decrypts a package, the audio is an ordinary
+  WAV. SecureTrack protects the file *in transit and at rest*, not
+  after a recipient chooses to redistribute it.
+
+## 8. Audacity macros (optional)
+
+If you want a one-key export-to-secure-folder shortcut from inside
+Audacity itself, see ``audacity_macro_notes.md`` for the manual
+steps to build a small Audacity Macro that exports the active
+project straight into the Exports folder.

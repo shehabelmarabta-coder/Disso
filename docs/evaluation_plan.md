@@ -10,17 +10,22 @@ from the test suite and CLI shipped in this repository.
 The aim is to demonstrate that the prototype performs the operations
 described in Chapter 4 end-to-end without data loss.
 
-| ID  | Requirement                                          | Method                                                       |
-|-----|------------------------------------------------------|--------------------------------------------------------------|
-| F1  | Encrypt then decrypt with a passphrase recipient     | ``tests/test_roundtrip.py::test_encrypt_then_decrypt_returns_exact_plaintext`` |
-| F2  | Encrypt then decrypt with an X25519 public-key recipient | ``test_pubkey_roundtrip``                                |
-| F3  | Mixed recipients: either credential works            | ``test_multi_recipient_either_works``                        |
-| F4  | Optional Ed25519 signature verifies                  | ``test_signed_package_roundtrip``                            |
-| F5  | Round-trip on disk preserves the original bytes      | ``test_metadata_round_trip_through_disk``                    |
-| F6  | Metadata captures every required field               | ``test_package_contains_required_metadata_fields``           |
-| F7  | CLI ``keygen``/``encrypt``/``decrypt``/``inspect`` succeed | ``tests/test_cli.py``                                  |
-| F8  | Audacity bridge sends ``SelectAll`` then ``Export2``  | ``tests/test_audacity_bridge.py::test_export_wav_sends_select_all_and_export2`` |
-| F9  | Audacity bridge rejects an empty exported WAV         | ``test_export_wav_rejects_empty_export``                     |
+| ID  | Requirement                                                          | Method                                                       |
+|-----|----------------------------------------------------------------------|--------------------------------------------------------------|
+| F1  | Encrypt then decrypt with a passphrase recipient                     | ``tests/test_roundtrip.py::test_encrypt_then_decrypt_returns_exact_plaintext`` |
+| F2  | Encrypt then decrypt with an X25519 public-key recipient             | ``test_pubkey_roundtrip``                                    |
+| F3  | Mixed recipients: either credential works                            | ``test_multi_recipient_either_works``                        |
+| F4  | Optional Ed25519 signature verifies                                  | ``test_signed_package_roundtrip``                            |
+| F5  | Round-trip on disk preserves the original bytes                      | ``test_metadata_round_trip_through_disk``                    |
+| F6  | Metadata captures every required field                               | ``test_package_contains_required_metadata_fields``           |
+| F7  | CLI ``keygen``/``encrypt``/``decrypt``/``inspect`` succeed           | ``tests/test_cli.py``                                        |
+| F8  | Audacity bridge sends ``SelectAll`` then ``Export2``                  | ``tests/test_audacity_bridge.py::test_export_wav_sends_select_all_and_export2`` |
+| F9  | Audacity bridge rejects an empty exported WAV                         | ``test_export_wav_rejects_empty_export``                     |
+| F10 | Watcher encrypts a new WAV dropped into Exports                      | ``tests/test_watch_folder.py::test_watcher_encrypts_new_wav`` |
+| F11 | Watcher does not re-encrypt a stable file                            | ``test_watcher_does_not_re_encrypt_stable_file``             |
+| F12 | Watcher keeps / moves / deletes the source per setting               | ``test_watcher_keeps_source_by_default``, ``test_watcher_moves_source_to_archive``, ``test_watcher_deletes_source_when_requested`` |
+| F13 | Watched-folder package decrypts back to the original bytes           | covered inside ``test_watcher_encrypts_new_wav``              |
+| F14 | Recovered WAV imports into Audacity                                  | manual evaluation step with screenshot evidence              |
 
 ## 2. Security testing
 
@@ -56,8 +61,7 @@ benchmark run:
 python -m securetrack.cli benchmark -i <wav> -o results/benchmark_results.csv -p <passphrase>
 ```
 
-Each call appends one row per invocation. The dissertation
-collects results across a small matrix of inputs:
+The dissertation collects results across a small matrix of inputs:
 
 | Input                          | Approx. size | Purpose                              |
 |--------------------------------|--------------|--------------------------------------|
@@ -78,11 +82,6 @@ For every benchmark row the application records:
 * ``size_overhead_bytes``  — ``encrypted - original``.
 * ``size_overhead_percent`` — ``(encrypted - original) / original * 100``.
 
-The overhead is dominated by the ZIP central directory, the JSON
-metadata, the wrapped recipient entries (~250 bytes each) and the
-16-byte AES-GCM tag per chunk. For typical multi-MB stems the
-percentage overhead is under 0.05 %.
-
 ### 3.2 Throughput
 
 ``time.perf_counter()`` brackets each operation. Throughput in MB/s
@@ -99,9 +98,7 @@ sha256_decrypted = hashlib.sha256(decrypted).hexdigest()
 hash_match       = sha256_original == sha256_decrypted
 ```
 
-``hash_match`` must be ``true`` for every row. Any ``false`` row
-would indicate a bug in the round-trip and would invalidate the
-prototype.
+``hash_match`` must be ``true`` for every row.
 
 ## 5. Tamper detection methodology
 
@@ -127,11 +124,20 @@ A small low-risk usability study is planned for the dissertation:
 * **Participants.** 4–6 University of Surrey music students who
   already use Audacity for collaboration.
 * **Tasks.**
-  1. Open SecureTrack and the *Encrypt WAV* tab.
-  2. Encrypt an exported WAV with a passphrase.
-  3. Receive a ``.securetrack`` package and decrypt it.
-  4. (Optional) Use the *Audacity Export* tab to export and encrypt
-     directly from a running Audacity project.
+  1. Open SecureTrack and click *Create / Open SecureTrack
+     Folders* on the Audacity Workflow tab.
+  2. Start watching the Exports folder.
+  3. Open Audacity, work on a small project, *Export* a WAV into
+     ``Documents/SecureTrack/Exports``.
+  4. Confirm a ``.securetrack`` package appears in
+     ``Documents/SecureTrack/Secure Packages`` automatically.
+  5. (Optional) Use *Option B — Export directly from Audacity* to
+     export the same project through ``mod-script-pipe``.
+  6. Decrypt a package received from a partner and import the
+     recovered WAV into Audacity.
+* **Step counting.** Number of distinct user actions in the
+  *Recommended Audacity Workflow* — used as a coarse usability
+  metric ("how many clicks does this take?").
 * **Instruments.** A 5-point Likert scale on perceived ease of use
   and perceived security, plus an open question about friction.
 * **Ethics.** No audio is collected; only ratings and free-text
@@ -140,26 +146,33 @@ A small low-risk usability study is planned for the dissertation:
 
 ## 7. Test evidence checklist
 
-The dissertation appendix should include screenshots of each of the
-following:
+The dissertation appendix should include screenshots of:
 
-* [ ] SecureTrack GUI window (all three tabs visible).
-* [ ] Encryption success dialog showing the output package and SHA-256.
+* [ ] SecureTrack GUI window with the **Audacity Workflow** tab
+      visible (workspace + recipient + watcher controls + activity
+      log).
+* [ ] Workspace folders opened in the OS file manager
+      (``Documents/SecureTrack/Exports`` and ``Secure Packages``).
+* [ ] *Watching …* status with a freshly encrypted entry in the
+      activity log.
+* [ ] An exported WAV in ``Exports/`` and the matching
+      ``.securetrack`` package in ``Secure Packages/``.
 * [ ] Decryption success dialog showing the recovered file.
 * [ ] Decryption failure dialog after a wrong passphrase.
 * [ ] Audacity *Test Audacity Connection* result (success).
 * [ ] Audacity *Export from Audacity and Encrypt* success dialog.
+* [ ] The recovered WAV imported into Audacity (track visible in
+      the Audacity timeline).
 * [ ] Benchmark CSV opened in a spreadsheet, with at least one row
-      per input from the matrix above.
+      per input from the size matrix.
 * [ ] ``pytest -v`` console output showing every test passing.
-* [ ] (Optional) Inspect output (``securetrack inspect --json``)
-      showing a package's metadata.
+* [ ] (Optional) ``securetrack inspect --json`` output for a
+      package.
 
 ## 8. Benchmark metrics
 
 Every benchmark CSV row contains the following columns. The schema
-is fixed by ``securetrack.metrics.CSV_FIELDNAMES`` and is identical
-on every platform:
+is fixed by ``securetrack.metrics.CSV_FIELDNAMES``:
 
 | Column                       | Unit / type | Source                                                |
 |------------------------------|-------------|-------------------------------------------------------|
