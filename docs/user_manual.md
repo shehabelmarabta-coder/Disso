@@ -175,7 +175,49 @@ file (``.pem``) there.
 | Watcher status stays *Not watching.*          | You forgot to enter a passphrase or pick a public key.                              | Fill in the *Recipient* section, then click *Start Watching Export Folder*.                                                            |
 | *Audacity is not open* / *project contains no audio* | Self-explanatory; the bridge has nothing to export.                          | Open Audacity, open or import audio, try again.                                                                                         |
 
-## 7. Tips
+## 7. Advanced: public / private key pairs
+
+A passphrase is the recommended way to use SecureTrack and is enough
+for most collaborations. If you would rather not share a passphrase,
+the application also supports **public/private key** pairs:
+
+* The **public key** is something you can share freely with
+  collaborators. They use it to encrypt packages addressed to you.
+* The **private key** stays on your machine and must remain secret.
+  It is the only thing that can open packages addressed to your
+  public key.
+
+### Generating a key pair from the GUI
+
+1. Open SecureTrack and switch to the **Decrypt Package** tab.
+2. In the **Advanced (optional)** area click **Generate Key Pair…**.
+3. The default save folder is ``Documents/SecureTrack/Keys`` and the
+   default name is ``collaborator_key``. Change either if you want.
+4. Click **Generate**. SecureTrack writes two files:
+   * ``<name>_public.pem`` — share this with collaborators.
+   * ``<name>_private.pem`` — keep this secret.
+5. The success dialog offers:
+   * **Copy public key path** — puts the public key file path on
+     the clipboard so you can paste it into an email or message to
+     a collaborator.
+   * **Open Key Folder** — opens the folder in the OS file manager
+     so you can see both files.
+
+The application never displays the contents of the private key.
+
+### Using a public key as a recipient
+
+* In the **Audacity Workflow** tab the recipient public key goes
+  under *Recipient ▸ Advanced (optional) ▸ Recipient public key
+  (.pem)*.
+* In the **Decrypt Package** tab you supply your *own* private key
+  under *Advanced (optional) ▸ Private key (.pem)*.
+
+You do not need to use both passphrase and key — pick one, or use
+them together if you want a passphrase fallback in addition to the
+public key.
+
+## 8. Tips
 
 * Pick strong passphrases. A 12-character random passphrase is much
   stronger than a short clever phrase.
@@ -186,7 +228,7 @@ file (``.pem``) there.
   WAV. SecureTrack protects the file *in transit and at rest*, not
   after a recipient chooses to redistribute it.
 
-## 8. Audacity macros (optional)
+## 9. Audacity macros (optional)
 
 If you want a one-key export-to-secure-folder shortcut from inside
 Audacity itself, see ``audacity_macro_notes.md`` for the manual

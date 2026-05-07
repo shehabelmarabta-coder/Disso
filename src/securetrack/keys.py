@@ -188,6 +188,43 @@ def load_ed25519_public(path: Path) -> Ed25519PublicKey:
     return key
 
 
+# --- convenience helper used by the GUI's "Generate Key Pair" button -------
+
+
+def generate_x25519_keypair_to(
+    folder: Path,
+    name: str,
+    *,
+    private_passphrase: str | None = None,
+) -> tuple[Path, Path]:
+    """Generate an X25519 keypair and write the two PEM files into ``folder``.
+
+    Args:
+        folder: Folder in which the two files are written. Created if missing.
+        name: Base name used for the files. ``"collaborator_key"`` produces
+            ``collaborator_key_public.pem`` and ``collaborator_key_private.pem``.
+        private_passphrase: Optional passphrase used to encrypt the private
+            key file at rest (PKCS#8 best-available encryption).
+
+    Returns:
+        ``(public_path, private_path)``.
+    """
+    if not name or not name.strip():
+        raise ValueError("key name must not be empty")
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    public_path = folder / f"{name}_public.pem"
+    private_path = folder / f"{name}_private.pem"
+    keypair = generate_x25519_keypair()
+    write_keypair(
+        keypair,
+        private_path=private_path,
+        public_path=public_path,
+        passphrase=private_passphrase,
+    )
+    return public_path, private_path
+
+
 __all__ = [
     "KeyKind",
     "X25519Keypair",
@@ -204,4 +241,5 @@ __all__ = [
     "load_x25519_public",
     "load_ed25519_private",
     "load_ed25519_public",
+    "generate_x25519_keypair_to",
 ]

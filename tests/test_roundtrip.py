@@ -151,6 +151,32 @@ def test_x25519_pem_roundtrip(tmp_path: Path) -> None:
     assert shared_a == shared_b
 
 
+def test_generate_x25519_keypair_to_writes_named_files(tmp_path: Path) -> None:
+    public_path, private_path = keys.generate_x25519_keypair_to(
+        tmp_path / "Keys", "alice"
+    )
+    assert public_path.name == "alice_public.pem"
+    assert private_path.name == "alice_private.pem"
+    assert public_path.exists() and private_path.exists()
+    # Files contain a working keypair.
+    loaded_priv = keys.load_x25519_private(private_path)
+    loaded_pub = keys.load_x25519_public(public_path)
+    shared = loaded_priv.exchange(loaded_pub)
+    assert isinstance(shared, bytes) and len(shared) == 32
+
+
+def test_generate_x25519_keypair_to_creates_missing_folders(tmp_path: Path) -> None:
+    target = tmp_path / "a" / "b" / "Keys"
+    public_path, private_path = keys.generate_x25519_keypair_to(target, "k")
+    assert target.is_dir()
+    assert public_path.exists() and private_path.exists()
+
+
+def test_generate_x25519_keypair_to_rejects_blank_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        keys.generate_x25519_keypair_to(tmp_path, "   ")
+
+
 def test_ed25519_pem_roundtrip(tmp_path: Path) -> None:
     kp = keys.generate_ed25519_keypair()
     priv = tmp_path / "sign.pem"

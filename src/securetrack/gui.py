@@ -180,11 +180,16 @@ def _make_app_class() -> type:
         # ---- top-level layout -------------------------------------------
 
         def _build_layout(self) -> None:
-            # A subtle accent so the app does not feel like a plain ttk
-            # form. Stays cross-platform and uses Tk's default theme.
+            # Subtle palette: an accent strip at the top, a soft page
+            # background, and a thin hairline below the header so the
+            # tab area reads as a card on a page rather than a plain
+            # form.
             self._accent = "#1f6feb"
+            self._page_bg = "#f6f8fa"
+            self._hairline = "#d0d7de"
+            self.configure(background=self._page_bg)
 
-            outer = ttk.Frame(self, padding=14)
+            outer = tk.Frame(self, background=self._page_bg, padx=14, pady=14)
             outer.pack(fill="both", expand=True)
 
             header = tk.Frame(outer, background=self._accent)
@@ -202,7 +207,10 @@ def _make_app_class() -> type:
                 padx=4, pady=8,
             ).pack(side="left")
 
-            ttk.Frame(outer).pack(pady=(0, 10))  # spacer
+            tk.Frame(outer, background=self._hairline, height=1).pack(
+                fill="x", pady=(0, 0)
+            )
+            tk.Frame(outer, background=self._page_bg, height=10).pack(fill="x")
 
             tabs = ttk.Notebook(outer)
             tabs.pack(fill="both", expand=True)
@@ -213,10 +221,12 @@ def _make_app_class() -> type:
             self.progress = ttk.Progressbar(outer, mode="indeterminate")
             self.progress.pack(fill="x", pady=(10, 4))
             self.status_var = tk.StringVar(value="Ready.")
-            self.status_label = ttk.Label(
-                outer, textvariable=self.status_var, foreground="#444"
+            self.status_label = tk.Label(
+                outer, textvariable=self.status_var,
+                background=self._page_bg, foreground="#444",
+                anchor="w",
             )
-            self.status_label.pack(anchor="w")
+            self.status_label.pack(anchor="w", fill="x")
 
         # ---- tab 1: Audacity Workflow -----------------------------------
 
@@ -458,6 +468,17 @@ def _make_app_class() -> type:
                 adv, text="Browse…",
                 command=lambda: self._pick_open_pem(self.dec_private_key),
             ).grid(row=0, column=2)
+
+            ttk.Separator(adv).grid(row=1, column=0, columnspan=3, sticky="we", pady=(10, 8))
+            ttk.Label(
+                adv,
+                text="Don't have a key pair yet?",
+                foreground="#555",
+            ).grid(row=2, column=0, sticky="w")
+            ttk.Button(
+                adv, text="Generate Key Pair…",
+                command=self._open_keygen_dialog,
+            ).grid(row=2, column=1, sticky="w", padx=(6, 0))
 
             ttk.Button(
                 frame, text="Open Secure Package", command=self.on_decrypt,
@@ -845,6 +866,198 @@ def _make_app_class() -> type:
                 "decrypt": "Decryption failed",
                 "audacity-export": "Audacity export failed",
             }.get(op, "Failed")
+
+        # ---- key generation dialog -------------------------------------
+
+        def _open_keygen_dialog(self) -> None:
+            """Modal dialog: choose folder + name, generate an X25519 keypair."""
+            dialog = tk.Toplevel(self)
+            dialog.title("Generate Key Pair")
+            dialog.transient(self)
+            dialog.grab_set()
+            dialog.configure(background=self._page_bg)
+            dialog.resizable(False, False)
+
+            wrap = tk.Frame(dialog, background=self._page_bg, padx=16, pady=16)
+            wrap.pack(fill="both", expand=True)
+
+            tk.Label(
+                wrap, text="Generate a key pair",
+                background=self._page_bg,
+                font=("TkDefaultFont", 11, "bold"),
+            ).grid(row=0, column=0, columnspan=3, sticky="w")
+            tk.Label(
+                wrap,
+                text=(
+                    "Two files are created: a public key (share with "
+                    "collaborators) and a private key (keep secret)."
+                ),
+                background=self._page_bg, foreground="#555",
+                wraplength=440, justify="left",
+            ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 12))
+
+            default_folder = watch_folder.default_workspace_root() / "Keys"
+            folder_var = tk.StringVar(value=str(default_folder))
+            name_var = tk.StringVar(value="collaborator_key")
+
+            tk.Label(
+                wrap, text="Save folder:",
+                background=self._page_bg,
+            ).grid(row=2, column=0, sticky="w", pady=(0, 2))
+            ttk.Entry(wrap, textvariable=folder_var, width=42).grid(
+                row=2, column=1, sticky="we", padx=(6, 6)
+            )
+            ttk.Button(
+                wrap, text="Browse…",
+                command=lambda: self._pick_keygen_folder(folder_var, dialog),
+            ).grid(row=2, column=2)
+
+            tk.Label(
+                wrap, text="Key name:",
+                background=self._page_bg,
+            ).grid(row=3, column=0, sticky="w", pady=(8, 2))
+            ttk.Entry(wrap, textvariable=name_var, width=42).grid(
+                row=3, column=1, columnspan=2, sticky="we", padx=(6, 0)
+            )
+
+            preview_var = tk.StringVar()
+
+            def update_preview(*_args: object) -> None:
+                n = name_var.get().strip() or "collaborator_key"
+                preview_var.set(f"Files: {n}_public.pem  /  {n}_private.pem")
+
+            update_preview()
+            name_var.trace_add("write", update_preview)
+            tk.Label(
+                wrap, textvariable=preview_var,
+                background=self._page_bg, foreground="#666",
+            ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+            btn_row = tk.Frame(wrap, background=self._page_bg)
+            btn_row.grid(row=5, column=0, columnspan=3, sticky="e", pady=(16, 0))
+            ttk.Button(btn_row, text="Cancel", command=dialog.destroy).pack(
+                side="right"
+            )
+            ttk.Button(
+                btn_row, text="Generate",
+                command=lambda: self._do_generate_keypair(
+                    folder_var.get(), name_var.get(), dialog
+                ),
+            ).pack(side="right", padx=(0, 8))
+
+            wrap.columnconfigure(1, weight=1)
+            self._centre_dialog(dialog)
+
+        def _pick_keygen_folder(self, var: object, parent: object) -> None:
+            path = filedialog.askdirectory(
+                title="Choose a folder to save the key pair",
+                parent=parent,
+            )
+            if path:
+                var.set(path)  # type: ignore[attr-defined]
+
+        def _do_generate_keypair(self, folder: str, name: str, dialog: object) -> None:
+            folder = folder.strip()
+            name = (name or "collaborator_key").strip() or "collaborator_key"
+            if not folder:
+                messagebox.showerror(
+                    "Missing folder",
+                    "Please choose a folder to save the key pair.",
+                    parent=dialog,
+                )
+                return
+            try:
+                public_path, private_path = keys.generate_x25519_keypair_to(
+                    Path(folder), name
+                )
+            except (OSError, ValueError) as exc:
+                messagebox.showerror(
+                    "Could not generate key pair", str(exc), parent=dialog,
+                )
+                return
+            dialog.destroy()  # type: ignore[attr-defined]
+            self._log(f"Generated key pair {name} in {folder}")
+            self._show_keygen_result(public_path, private_path)
+
+        def _show_keygen_result(
+            self, public_path: Path, private_path: Path
+        ) -> None:
+            dialog = tk.Toplevel(self)
+            dialog.title("Key pair created")
+            dialog.transient(self)
+            dialog.grab_set()
+            dialog.configure(background=self._page_bg)
+            dialog.resizable(False, False)
+
+            wrap = tk.Frame(dialog, background=self._page_bg, padx=16, pady=16)
+            wrap.pack(fill="both", expand=True)
+
+            tk.Label(
+                wrap, text="Key pair created",
+                background=self._page_bg,
+                font=("TkDefaultFont", 11, "bold"),
+            ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+            pub_box = ttk.LabelFrame(wrap, text="Public key", padding=10)
+            pub_box.grid(row=1, column=0, sticky="we", pady=(0, 8))
+            pub_box.columnconfigure(0, weight=1)
+            ttk.Label(
+                pub_box,
+                text="Public key created. Share this public key with collaborators.",
+                wraplength=440, justify="left",
+            ).grid(row=0, column=0, sticky="w")
+            ttk.Label(
+                pub_box, text=str(public_path), foreground=self._accent,
+                wraplength=440, justify="left",
+            ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+            ttk.Button(
+                pub_box, text="Copy public key path",
+                command=lambda: self._copy_to_clipboard(str(public_path)),
+            ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+            priv_box = ttk.LabelFrame(wrap, text="Private key", padding=10)
+            priv_box.grid(row=2, column=0, sticky="we", pady=(0, 8))
+            priv_box.columnconfigure(0, weight=1)
+            ttk.Label(
+                priv_box,
+                text="Private key created. Keep this private key secret.",
+                foreground="#b00020", wraplength=440, justify="left",
+            ).grid(row=0, column=0, sticky="w")
+            ttk.Label(
+                priv_box, text=str(private_path), foreground="#444",
+                wraplength=440, justify="left",
+            ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+            btn_row = tk.Frame(wrap, background=self._page_bg)
+            btn_row.grid(row=3, column=0, sticky="e", pady=(8, 0))
+            ttk.Button(
+                btn_row, text="Open Key Folder",
+                command=lambda: _open_in_file_manager(public_path.parent),
+            ).pack(side="right", padx=(8, 0))
+            ttk.Button(btn_row, text="Done", command=dialog.destroy).pack(
+                side="right"
+            )
+
+            wrap.columnconfigure(0, weight=1)
+            self._centre_dialog(dialog)
+
+        def _copy_to_clipboard(self, value: str) -> None:
+            self.clipboard_clear()
+            self.clipboard_append(value)
+            self.update()  # keep the clipboard contents after the window goes away
+            self.status_var.set("Public key path copied to clipboard.")
+            self.status_label.configure(foreground="#1a7f37")
+
+        def _centre_dialog(self, dialog: object) -> None:
+            dialog.update_idletasks()  # type: ignore[attr-defined]
+            try:
+                w = dialog.winfo_width()  # type: ignore[attr-defined]
+                h = dialog.winfo_height()  # type: ignore[attr-defined]
+                x = self.winfo_x() + (self.winfo_width() - w) // 2
+                y = self.winfo_y() + (self.winfo_height() - h) // 2
+                dialog.geometry(f"+{max(0, x)}+{max(0, y)}")  # type: ignore[attr-defined]
+            except tk.TclError:
+                pass
 
         # ---- shutdown --------------------------------------------------
 
